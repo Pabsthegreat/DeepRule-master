@@ -1,0 +1,90 @@
+{
+  "chart_type": "Bar",
+  "chart_title_candidates": {
+    "1": "Ap%",
+    "2": "n\u00e9 Enqouuxliu st rtgesue guetoegsn larstteopdsbs taamteedeoe 2014 ue ao"
+  },
+  "y_axis_min_est": 0.0,
+  "y_axis_max_est": 25.0,
+  "bars_raw": [
+    [
+      333.7696533203125,
+      347.59222412109375,
+      403.6527404785156,
+      529.9891967773438
+    ],
+    [
+      157.75575256347656,
+      268.16796875,
+      227.80865478515625,
+      529.9599609375
+    ],
+    [
+      509.102294921875,
+      133.0417022705078,
+      578.789306640625,
+      529.9002685546875
+    ],
+    [
+      684.7583618164062,
+      483.5940246582031,
+      754.4447631835938,
+      529.7645874023438
+    ]
+  ],
+  "bars_summary": [
+    {
+      "bar_index": 0,
+      "category": "pourlesd\u00e9placements",
+      "label": "ao",
+      "color": "#8a8e91",
+      "x1": 333.7696533203125,
+      "y1_top": 347.59222412109375,
+      "x2": 403.6527404785156,
+      "y2_bottom": 529.9891967773438,
+      "pixel_height": 182.39697265625,
+      "value": 10.18,
+      "baseline_value": -0.01
+    },
+    {
+      "bar_index": 1,
+      "category": "pourlelogement",
+      "label": "ao",
+      "color": "#8a8e91",
+      "x1": 157.75575256347656,
+      "y1_top": 268.16796875,
+      "x2": 227.80865478515625,
+      "y2_bottom": 529.9599609375,
+      "pixel_height": 261.7919921875,
+      "value": 14.61,
+      "baseline_value": -0.01
+    },
+    {
+      "bar_index": 2,
+      "category": "pourau moins une",
+      "label": "ao",
+      "color": "#8a8e91",
+      "x1": 509.102294921875,
+      "y1_top": 133.0417022705078,
+      "x2": 578.789306640625,
+      "y2_bottom": 529.9002685546875,
+      "pixel_height": 396.8585662841797,
+      "value": 22.16,
+      "baseline_value": -0.0
+    },
+    {
+      "bar_index": 3,
+      "category": "pour",
+      "label": "ao",
+      "color": "#8a8e91",
+      "x1": 684.7583618164062,
+      "y1_top": 483.5940246582031,
+      "x2": 754.4447631835938,
+      "y2_bottom": 529.7645874023438,
+      "pixel_height": 46.170562744140625,
+      "value": 2.58,
+      "baseline_value": 0.01
+    }
+  ],
+  "csv_path": "/Users/adarsh/Documents/GitHub/DeepRule-master/output_fixed/8a65d61e46f8f92a4c5be2ed012f7d8c_d3d3LnN0YXRpc3RpcXVlcy5kZXZlbG9wcGVtZW50LWR1cmFibGUuZ291di5mcgkzNy4yMzUuODkuMTA3.xls-1-0_table.csv"
+}

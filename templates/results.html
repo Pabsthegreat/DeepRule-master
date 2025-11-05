@@ -1,47 +1,126 @@
 <!DOCTYPE html>
-{% load staticfiles %}
+{% load static %}
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Results</title>
+    <title>Chart Analysis Results</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 24px; background: #f5f5f5; color: #222; }
+        h1, h2 { color: #1f2d3d; }
+        .images { display: flex; flex-wrap: wrap; gap: 16px; margin-bottom: 24px; }
+        figure { margin: 0; }
+        figure img { max-width: 480px; border: 1px solid #d0d7de; background: #fff; }
+        figure figcaption { margin-top: 8px; text-align: center; font-size: 0.9rem; color: #555; }
+        table { border-collapse: collapse; width: 100%; background: #fff; margin-top: 12px; }
+        th, td { border: 1px solid #d0d7de; padding: 8px 10px; text-align: left; }
+        th { background: #eef2f7; font-weight: 600; }
+        .color-swatch { width: 16px; height: 16px; border: 1px solid #a0a0a0; display: inline-block; vertical-align: middle; margin-right: 6px; }
+        pre { background: #1f2933; color: #f8fafc; padding: 12px; overflow-x: auto; border-radius: 4px; }
+        .summary { background: #fff; padding: 16px; border: 1px solid #d0d7de; border-radius: 4px; margin-bottom: 24px; }
+        .form_block { margin-bottom: 12px; }
+        form { margin-top: 24px; background: #fff; padding: 16px; border: 1px solid #d0d7de; border-radius: 4px; }
+        button { background: #2563eb; color: #fff; border: none; padding: 10px 16px; border-radius: 4px; cursor: pointer; }
+        button:hover { background: #1e55c6; }
+        .meta { font-size: 0.95rem; line-height: 1.6; }
+        .cta { margin-top: 12px; display: inline-block; }
+    </style>
 </head>
 <body>
-    <img src={{image}}  alt="Original" />
-    <img src={{image_painted}}  alt="Marked" />
-    <br/>
-    <h2>Type</h2>
-    <br/>
-    {{Type}}
-    <br/>
-    <h2>Y Range</h2>
-    <br/>
-    {{min2max}}
-    <br/>
-    <form method="post" enctype="multipart/form-data">
-    <div class="form_block">
-    min value: <input type="text" name="min"/>
-    </div>
-    <div class="form_block">
-    max value: <input type="text" name="max"/>
-    </div>
-    <button type="submit">Upload</button>
-    </form>
-    <h2>Data</h2>
-    <br/>
-    <pre>
-    {{data|linebreaks}}
-    </pre>
-    <br/>
-    <h2>ChartTitle</h2>
-    <br/>
-    {{ChartTitle}}
-    <br/>
-    <h2>ValueAxisTitle</h2>
-    <br/>
-    {{ValueAxisTitle}}
-    <br/>
-    <h2>CategoryAxisTitle</h2>
-    <br/>
-    {{CategoryAxisTitle}}
+    <h1>Chart Analysis Results</h1>
+
+    <section class="images">
+        <figure>
+            <img src="{{ image }}" alt="Uploaded chart">
+            <figcaption>Original Chart</figcaption>
+        </figure>
+        {% if image_painted %}
+        <figure>
+            <img src="{{ image_painted }}" alt="Detected overlay">
+            <figcaption>Detected Bars</figcaption>
+        </figure>
+        {% endif %}
+    </section>
+
+    <section class="summary">
+        <h2>Summary</h2>
+        <div class="meta"><strong>Chart type:</strong> {{ Type }}</div>
+        {% if ChartTitle and ChartTitle != "None" %}
+        <div class="meta"><strong>Chart title:</strong> {{ ChartTitle }}</div>
+        {% endif %}
+        {% if ValueAxisTitle and ValueAxisTitle != "None" %}
+        <div class="meta"><strong>Value axis:</strong> {{ ValueAxisTitle }}</div>
+        {% endif %}
+        {% if CategoryAxisTitle and CategoryAxisTitle != "None" %}
+        <div class="meta"><strong>Category axis:</strong> {{ CategoryAxisTitle }}</div>
+        {% endif %}
+        <div class="meta"><strong>Y-axis range:</strong> {{ min2max }}</div>
+        {% if bar_stats %}
+        <div class="meta"><strong>Min:</strong> {{ bar_stats.min|floatformat:2 }} &nbsp;
+            <strong>Max:</strong> {{ bar_stats.max|floatformat:2 }} &nbsp;
+            <strong>Average:</strong> {{ bar_stats.avg|floatformat:2 }}</div>
+        {% endif %}
+        {% if csv_path %}
+        <div class="meta"><strong>CSV saved to:</strong> {{ csv_path }}</div>
+        {% endif %}
+    </section>
+
+    {% if bar_rows %}
+    <section>
+        <h2>Detected Bars</h2>
+        <table>
+            <thead>
+                <tr>
+                    <th>#</th>
+                    <th>Category</th>
+                    <th>Legend</th>
+                    <th>Value</th>
+                    <th>Color</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for row in bar_rows %}
+                <tr>
+                    <td>{{ row.index }}</td>
+                    <td>{% if row.category %}{{ row.category }}{% else %}(no X-label){% endif %}</td>
+                    <td>{{ row.label }}</td>
+                    <td>{% if row.value is not None %}{{ row.value|floatformat:2 }}{% else %}--{% endif %}</td>
+                    <td>
+                        {% if row.color %}
+                        <span class="color-swatch" style="background-color: {{ row.color }};"></span>{{ row.color }}
+                        {% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </section>
+    {% endif %}
+
+    {% if bar_summary_lines %}
+    <section>
+        <h2>Console Summary</h2>
+        <pre>{% for line in bar_summary_lines %}{{ line }}{% if not forloop.last %}&#10;{% endif %}{% endfor %}</pre>
+    </section>
+    {% endif %}
+
+    <section>
+        <h2>Try Another Image</h2>
+        <form method="post" enctype="multipart/form-data">
+            <div class="form_block">
+                <label for="file">Chart image (optional):</label>
+                <input id="file" type="file" name="file">
+            </div>
+            <div class="form_block">
+                <label for="min">Min value (optional override):</label>
+                <input id="min" type="text" name="min" placeholder="e.g. 0">
+            </div>
+            <div class="form_block">
+                <label for="max">Max value (optional override):</label>
+                <input id="max" type="text" name="max" placeholder="e.g. 100">
+            </div>
+            <button type="submit">Run Analysis</button>
+        </form>
+        <a class="cta" href="/">Back to upload page</a>
+    </section>
 </body>
 </html>

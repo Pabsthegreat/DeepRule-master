@@ -1,106 +1,171 @@
-from django.http import HttpResponse
-from test_pipeline import test
-from django.shortcuts import render
+import os
 import base64
+
+from django.conf import settings
+from django.shortcuts import render
 import torch.cuda
-from PIL import Image
-cat2id = {0:'Bar', 1:'Line', 2:'Pie'}
+
+from test_pipe_type_cloud import Pre_load_nets, run_on_image
+
 Lock = False
+_CLOUD_METHODS = None
+RESULT_SAVE_DIR = "output_fixed"
+
+
+def _ensure_methods():
+    global _CLOUD_METHODS
+    if _CLOUD_METHODS is None:
+        data_root = settings.BASE_DIR
+        cache_dir = os.path.join(settings.BASE_DIR, "cache")
+        _CLOUD_METHODS = Pre_load_nets("Bar", 0, data_root, cache_dir)
+    return _CLOUD_METHODS
+
+
+def _file_to_data_uri(path):
+    with open(path, "rb") as handle:
+        encoded = base64.b64encode(handle.read()).decode("ascii")
+    return f"data:image/png;base64,{encoded}"
+
+
+def _rescale_value(value, src_min, src_max, dst_min, dst_max):
+    if value is None:
+        return None
+    if src_min is None or src_max is None:
+        return value
+    if abs(src_max - src_min) < 1e-6:
+        return value
+    return dst_min + (value - src_min) * (dst_max - dst_min) / (src_max - src_min)
+
+
 def get_group(request):
     global Lock
-    print("The method is: %s" %request.method)
-    if not Lock:
-        if request.method == 'POST':
-            #print(request.FILES)
-            #print(request.POST)
-            print("Clean Cuda Cache")
-            torch.cuda.empty_cache()
-            Lock = True
-            try:
-                if 'file' in request.FILES.keys():
-                    with open('static/target.png', 'wb') as fout:
-                        for chunk in request.FILES['file'].chunks():
-                            fout.write(chunk)
-                if len(request.POST['min']) > 0:
-                    min_value = float(request.POST['min'])
-                    max_value = float(request.POST['max'])
-                else:
-                    min_value = None
-                    max_value = None
-                plot_area, image_painted, data, chart_data = test('static/target.png', min_value_official=min_value, max_value_official=max_value)
-                print_data = ''
-                if chart_data[0]==0:
-                    if len(request.POST['min']) > 0:
-                        min_value = float(request.POST['min'])
-                        max_value = float(request.POST['max'])
-                    else:
-                        min_value = chart_data[3]
-                        max_value = chart_data[4]
-                    for k in range(len(data)):
-                        for j in range(len(data[k])):
-                            data[k][j] = round((max_value - min_value) * data[k][j] + min_value, 2)
-                            print_data += ('%8.2f' % (data[k][j]))
-                            print_data += ' '
-                        print_data += '\n'
-                if chart_data[0] == 1:
-                    if len(request.POST['min']) > 0:
-                        min_value = float(request.POST['min'])
-                        max_value = float(request.POST['max'])
-                    else:
-                        min_value = chart_data[3]
-                        max_value = chart_data[4]
-                    for k in range(len(data)):
-                        for j in range(len(data[k])):
-                            data[k][j] = round((max_value - min_value) * data[k][j] + min_value, 2)
-                            print_data += ('%8.2f' % (data[k][j]))
-                            print_data += ' '
-                        print_data += '\n'
-                if chart_data[0]==2:
-                    for k in range(len(data)):
-                        data[k] /= 360
-                    data = [round(x, 2) for x in data]
-                    for k in range(len(data)):
-                        print_data += ('%8.2f' % (data[k]))
-                        print_data += ' '
-                    min_value = 0
-                    max_value = 1
-                image_painted.save('static/target_draw.png')
-                with open("static/target.png", "rb") as f:
-                    base64_data = base64.b64encode(f.read())
-                    str_format_ori = 'data:image/png;base64,' + base64_data.decode()
-                with open("static/target_draw.png", "rb") as f:
-                    base64_data = base64.b64encode(f.read())
-                    str_format_tar = 'data:image/png;base64,' + base64_data.decode()
-                context = {'data': print_data, 'image': str_format_ori, 'image_painted': str_format_tar, 'plot_area': plot_area, 'min2max': '%2f:%2f' %(min_value, max_value)}
-                title2string = chart_data[2]
-                if 1 in title2string.keys():
-                    context['ValueAxisTitle'] = title2string[1]
-                else:
-                    context['ValueAxisTitle'] = "None"
-                if 2 in title2string.keys():
-                    context['ChartTitle'] = title2string[2]
-                else:
-                    context['ChartTitle'] = "None"
-                if 3 in title2string.keys():
-                    context['CategoryAxisTitle'] = title2string[3]
-                else:
-                    context['CategoryAxisTitle'] = "None"
-                context['Type'] = cat2id[chart_data[0]]
-            except:
-                print('We met some errors!')
-                Lock = False
-                raise
-            Lock = False
-            return render(request, 'results.html', context)
-        else:
-            return render(request, 'upload.html')
-    else:
-        return render(request, 'onuse.html')
+    if Lock:
+        return render(request, "onuse.html")
 
-type2idFormal = {
-    "Legend" : 0,
-    "ValueAxisTitle" : 1,
-    "ChartTitle" : 2,
-    "CategoryAxisTitle" : 3,
-    "PlotArea" : 4,
-    "InnerPlotArea" : 5}
+    if request.method != "POST":
+        return render(request, "upload.html")
+
+    print(f"The method is: {request.method}")
+    if torch.cuda.is_available():
+        print("Clean CUDA cache")
+        torch.cuda.empty_cache()
+
+    static_dir = os.path.join(settings.BASE_DIR, "static")
+    os.makedirs(static_dir, exist_ok=True)
+    target_path = os.path.join(static_dir, "target.png")
+    save_dir = os.path.join(settings.BASE_DIR, RESULT_SAVE_DIR)
+
+    Lock = True
+    try:
+        upload_file = request.FILES.get("file")
+        if upload_file is not None:
+            with open(target_path, "wb") as fout:
+                for chunk in upload_file.chunks():
+                    fout.write(chunk)
+        if not os.path.exists(target_path):
+            raise RuntimeError("No chart image uploaded.")
+
+        min_field = request.POST.get("min", "").strip()
+        max_field = request.POST.get("max", "").strip()
+        override_min = override_max = None
+        if min_field:
+            try:
+                override_min = float(min_field)
+                override_max = float(max_field)
+            except (TypeError, ValueError):
+                override_min = override_max = None
+
+        methods = _ensure_methods()
+        result = run_on_image(
+            target_path,
+            "Bar",
+            save_path=save_dir,
+            methods_override=methods,
+            return_images=True,
+        )
+
+        bars_summary = sorted(result.get("bars_summary") or [], key=lambda r: r.get("x1", 0))
+        y_min_est = result.get("y_axis_min_est")
+        y_max_est = result.get("y_axis_max_est")
+
+        processed_rows = []
+        summary_lines = []
+        values = []
+
+        for idx, row in enumerate(bars_summary, 1):
+            value = row.get("value")
+            if (
+                value is not None
+                and override_min is not None
+                and override_max is not None
+                and y_min_est is not None
+                and y_max_est is not None
+            ):
+                value = _rescale_value(value, y_min_est, y_max_est, override_min, override_max)
+            if value is not None:
+                value = round(value, 2)
+                values.append(value)
+
+            category = row.get("category") or ""
+            label = row.get("label") or ""
+            color = row.get("color")
+
+            processed_rows.append({
+                "index": idx,
+                "category": category,
+                "label": label,
+                "value": value,
+                "color": color,
+            })
+
+            val_str = "--" if value is None else f"{value:,.2f}"
+            if category and label:
+                summary_lines.append(f"Bar {idx:02d}: {category} | {label} = {val_str}")
+            elif category:
+                summary_lines.append(f"Bar {idx:02d}: {category} = {val_str}")
+            elif label:
+                summary_lines.append(f"Bar {idx:02d}: {label} = {val_str}")
+            else:
+                summary_lines.append(f"Bar {idx:02d}: {val_str}")
+
+        if override_min is not None and override_max is not None:
+            y_axis_summary = f"{override_min:.2f} to {override_max:.2f}"
+        elif y_min_est is not None and y_max_est is not None:
+            y_axis_summary = f"{y_min_est:.2f} to {y_max_est:.2f}"
+        else:
+            y_axis_summary = "Not detected"
+
+        titles = result.get("chart_title_candidates") or {}
+
+        original_b64 = result.get("original_image_b64") or _file_to_data_uri(target_path)
+        overlay_b64 = result.get("overlay_image_b64") or original_b64
+
+        context = {
+            "Type": result.get("chart_type", "Unknown"),
+            "image": original_b64,
+            "image_painted": overlay_b64,
+            "min2max": y_axis_summary,
+            "bar_rows": processed_rows,
+            "bar_summary_lines": summary_lines,
+            "ChartTitle": titles.get("2") or "None",
+            "ValueAxisTitle": titles.get("1") or "None",
+            "CategoryAxisTitle": titles.get("3") or "None",
+        }
+
+        if values:
+            context["bar_stats"] = {
+                "min": min(values),
+                "max": max(values),
+                "avg": sum(values) / len(values),
+            }
+
+        if summary_lines:
+            context["data"] = "\n".join(summary_lines)
+
+        csv_path = result.get("csv_path")
+        if csv_path:
+            context["csv_path"] = os.path.relpath(csv_path, settings.BASE_DIR)
+
+        return render(request, "results.html", context)
+    finally:
+        Lock = False

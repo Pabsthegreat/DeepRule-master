@@ -81,4 +81,4 @@ class model(kp_pure_bar):
         )
 
 loss = AELossPure(focal_loss=_neg_loss, lamda=4, lamdb=2)
-from azureml.core.compute import ComputeTarget
+#from azureml.core.compute import ComputeTarget

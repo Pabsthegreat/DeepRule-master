@@ -25,7 +25,7 @@ SECRET_KEY = 'zo&)@ryp4g@2a2#sl0*2^zdw)zhg%3xc7ar7$945(ka_mhhuc3'
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
-ALLOWED_HOSTS = ['gpu12.kcgpu.com']
+ALLOWED_HOSTS = ['gpu12.kcgpu.com', 'localhost', '127.0.0.1', '0.0.0.0']
 
 
 # Application definition
@@ -69,7 +69,7 @@ TEMPLATES = [
 
 WSGI_APPLICATION = 'server_match.wsgi.application'
 
-SECURE_SSL_REDIRECT = True
+SECURE_SSL_REDIRECT = False
 # Database
 # https://docs.djangoproject.com/en/2.2/ref/settings/#databases
 

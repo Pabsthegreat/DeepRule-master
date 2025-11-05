@@ -8,8 +8,8 @@ import copy
 from tqdm import tqdm
 from db.detection import DETECTION
 from config import system_configs
-from pycocotool.coco import COCO
-from pycocotool.cocoeval import COCOeval
+from pycocotools.coco import COCO
+from pycocotools.cocoeval import COCOeval
 
 
 class MSCOCO(DETECTION):
