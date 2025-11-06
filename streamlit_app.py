@@ -199,7 +199,7 @@ if uploaded_file is not None:
                             }
                             for d in pie_data
                         ])
-                        st.dataframe(df, use_container_width=True)
+                        st.dataframe(df, width='stretch')
                 
                 elif actual_chart_type == "Line":
                     line_data = result.get("lines_summary", [])
@@ -224,7 +224,7 @@ if uploaded_file is not None:
                             }
                             for d in line_data
                         ])
-                        st.dataframe(df, use_container_width=True)
+                        st.dataframe(df, width='stretch')
                 
                 else:  # Bar
                     bar_data = result.get("bars_summary", [])
@@ -256,7 +256,7 @@ if uploaded_file is not None:
                             })
                         
                         df = pd.DataFrame(processed_data)
-                        st.dataframe(df, use_container_width=True)
+                        st.dataframe(df, width='stretch')
                 
                 # Titles
                 titles = result.get("chart_title_candidates", {})
