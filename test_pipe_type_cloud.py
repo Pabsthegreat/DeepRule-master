@@ -680,7 +680,7 @@ def ocr_xaxis_region_with_rotation(image_path, plot_bbox, debug=False):
     
     return all_words
 
-def extract_xaxis_labels(word_infos, cls_info, img_height, image_path=None):
+def extract_xaxis_labels(word_infos, cls_info, img_height, image_path=None, debug=False):
     """
     Extract X-axis labels (category labels below the plot area).
     Handles horizontal, tilted, and vertical labels.
@@ -698,7 +698,7 @@ def extract_xaxis_labels(word_infos, cls_info, img_height, image_path=None):
     extra_words = []
     if image_path:
         print(f"\n[X-axis OCR] Using plot coordinates: {plot}")
-        extra_words = ocr_xaxis_region_with_rotation(image_path, plot, debug=True)
+        extra_words = ocr_xaxis_region_with_rotation(image_path, plot, debug=debug)
         # Merge extra words into word_infos
         all_word_infos = list(word_infos) + extra_words
     else:
@@ -1051,7 +1051,7 @@ def closest_legend(rgb, legend, max_distance=10000):
 # Main per-image pipeline
 # ------------------------------------------------------------------
 
-def run_on_image(image_path, chart_type="Bar", save_path=None, methods_override=None, return_images=False):
+def run_on_image(image_path, chart_type="Bar", save_path=None, methods_override=None, return_images=False, debug=False):
     model_bundle = methods_override or methods
     if model_bundle is None:
         raise RuntimeError("Models not loaded. Call Pre_load_nets first.")
@@ -1123,7 +1123,7 @@ def run_on_image(image_path, chart_type="Bar", save_path=None, methods_override=
                 overlay_b64 = _encode_image_to_base64(pil_img_copy)
 
         # Extract X-axis labels (category labels) - mainly for bar/line charts
-        x_axis_labels = extract_xaxis_labels(words, cls_info, img.shape[0], image_path)
+        x_axis_labels = extract_xaxis_labels(words, cls_info, img.shape[0], image_path, debug=debug)
         bar_x_labels = map_labels_to_bars(bars_raw, x_axis_labels) if chart_type == "Bar" else {}
         
         legend_items = find_legend_pairs(img, words)

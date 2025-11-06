@@ -1,5 +1,63 @@
 # DeepRule
-Compete code of DeepRule
+AI-Powered Chart Data Extraction System
+
+## 🚀 Quick Start
+
+### Option 1: Web UI (Django) - Production Ready
+```bash
+source .venv/bin/activate
+python manage.py runserver 0.0.0.0:8000
+```
+Access at: http://localhost:8000
+
+### Option 2: Demo UI (Streamlit) - Quick Testing
+```bash
+./run_streamlit.sh
+```
+Access at: http://localhost:8501
+
+### Option 3: REST API
+```bash
+curl -X POST http://localhost:8000/api/extract \
+  -F "file=@chart.png" \
+  -F "chart_type=Auto"
+```
+API Docs: http://localhost:8000/api/docs
+
+## 📚 Documentation
+
+Comprehensive documentation in `/docs` folder:
+- **Installation Guide**: `docs/installation.md`
+- **Architecture**: `docs/architecture.md`
+- **Pipeline**: `docs/pipeline.md`
+- **X-axis Extraction**: `docs/xaxis-extraction.md`
+- **Training Guide**: `docs/training.md`
+- **Inference Guide**: `docs/inference.md`
+- **API Guide**: `API_README.md`
+
+## ✨ Recent Updates
+
+### UI Improvements
+- 🎨 Modern, professional web interface with drag-and-drop
+- 📱 Responsive design for mobile devices
+- 🎯 Real-time file preview and upload status
+
+### Performance Optimizations
+- ⚡ In-memory image processing (no intermediate files)
+- 🐛 Optional debug mode with flag (`debug=true`)
+- 🔄 Model caching for faster inference
+
+### API Features
+- 🔌 RESTful API at `/api/extract`
+- 🌐 CORS enabled for cross-origin requests
+- 📖 Comprehensive API documentation
+- 🔍 Support for Bar, Line, and Pie charts
+
+### X-axis Detection
+- 🔄 Multi-orientation OCR (0°, ±45°, ±90°)
+- 📏 Conservative merging algorithm (70% overlap + gap check)
+- 🎯 Individual bbox rotation for tilted labels
+
 ## Getting Started
 Please first install [Anaconda](https://anaconda.org) and create an Anaconda environment using the provided package list.
 ```

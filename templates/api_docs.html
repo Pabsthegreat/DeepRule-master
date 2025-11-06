@@ -1,0 +1,439 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DeepRule API Documentation</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: #f5f7fa;
+            padding: 40px 20px;
+            line-height: 1.6;
+        }
+        
+        .container {
+            max-width: 1000px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 2px 20px rgba(0, 0, 0, 0.1);
+            padding: 40px;
+        }
+        
+        h1 {
+            color: #1a202c;
+            font-size: 36px;
+            margin-bottom: 10px;
+        }
+        
+        .subtitle {
+            color: #718096;
+            font-size: 18px;
+            margin-bottom: 40px;
+        }
+        
+        h2 {
+            color: #2d3748;
+            font-size: 24px;
+            margin-top: 40px;
+            margin-bottom: 20px;
+            padding-bottom: 10px;
+            border-bottom: 2px solid #e2e8f0;
+        }
+        
+        h3 {
+            color: #4a5568;
+            font-size: 18px;
+            margin-top: 30px;
+            margin-bottom: 15px;
+        }
+        
+        .endpoint {
+            background: #f7fafc;
+            border-left: 4px solid #667eea;
+            padding: 20px;
+            margin: 20px 0;
+            border-radius: 8px;
+        }
+        
+        .method {
+            display: inline-block;
+            background: #48bb78;
+            color: white;
+            padding: 4px 12px;
+            border-radius: 4px;
+            font-weight: 600;
+            font-size: 14px;
+            margin-right: 10px;
+        }
+        
+        .url {
+            font-family: 'Courier New', monospace;
+            font-size: 16px;
+            color: #2d3748;
+        }
+        
+        .param-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 20px 0;
+        }
+        
+        .param-table th,
+        .param-table td {
+            text-align: left;
+            padding: 12px;
+            border-bottom: 1px solid #e2e8f0;
+        }
+        
+        .param-table th {
+            background: #f7fafc;
+            font-weight: 600;
+            color: #2d3748;
+        }
+        
+        .param-table code {
+            background: #edf2f7;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-family: 'Courier New', monospace;
+            font-size: 13px;
+        }
+        
+        .code-block {
+            background: #1a202c;
+            color: #f7fafc;
+            padding: 20px;
+            border-radius: 8px;
+            overflow-x: auto;
+            margin: 20px 0;
+            font-family: 'Courier New', monospace;
+            font-size: 14px;
+            line-height: 1.5;
+        }
+        
+        .response-example {
+            background: #f0fff4;
+            border-left: 4px solid #48bb78;
+            padding: 20px;
+            margin: 20px 0;
+            border-radius: 8px;
+        }
+        
+        .note {
+            background: #fef5e7;
+            border-left: 4px solid #f39c12;
+            padding: 15px;
+            margin: 20px 0;
+            border-radius: 8px;
+        }
+        
+        .note strong {
+            color: #d68910;
+        }
+        
+        .back-link {
+            display: inline-block;
+            margin-top: 40px;
+            padding: 12px 24px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            text-decoration: none;
+            border-radius: 8px;
+            font-weight: 600;
+            transition: transform 0.2s ease;
+        }
+        
+        .back-link:hover {
+            transform: translateY(-2px);
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🔌 DeepRule API</h1>
+        <p class="subtitle">Extract structured data from chart images programmatically</p>
+        
+        <h2>Base URL</h2>
+        <div class="code-block" id="baseUrl">Loading...</div>
+        
+        <h2>Endpoint</h2>
+        
+        <div class="endpoint">
+            <span class="method">POST</span>
+            <span class="url">/api/extract</span>
+        </div>
+        
+        <p>Extract structured data from a chart image. Supports bar charts, line charts, and pie charts.</p>
+        
+        <h3>Request Parameters</h3>
+        
+        <table class="param-table">
+            <thead>
+                <tr>
+                    <th>Parameter</th>
+                    <th>Type</th>
+                    <th>Required</th>
+                    <th>Description</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td><code>file</code></td>
+                    <td>File</td>
+                    <td>Yes</td>
+                    <td>Chart image file (PNG, JPG, JPEG)</td>
+                </tr>
+                <tr>
+                    <td><code>chart_type</code></td>
+                    <td>String</td>
+                    <td>No</td>
+                    <td>Chart type: "Auto", "Bar", "Line", or "Pie" (default: "Auto")</td>
+                </tr>
+                <tr>
+                    <td><code>min</code></td>
+                    <td>Number</td>
+                    <td>No</td>
+                    <td>Minimum Y-axis value for rescaling</td>
+                </tr>
+                <tr>
+                    <td><code>max</code></td>
+                    <td>Number</td>
+                    <td>No</td>
+                    <td>Maximum Y-axis value for rescaling</td>
+                </tr>
+                <tr>
+                    <td><code>debug</code></td>
+                    <td>Boolean</td>
+                    <td>No</td>
+                    <td>Enable debug mode (saves intermediate images). Use "true" or "false" (default: "false")</td>
+                </tr>
+            </tbody>
+        </table>
+        
+        <h3>Example Request (cURL)</h3>
+        
+        <div class="code-block">
+curl -X POST <span id="curlUrl">http://localhost:8000</span>/api/extract \
+  -F "file=@chart.png" \
+  -F "chart_type=Auto" \
+  -F "debug=false"
+        </div>
+        
+        <h3>Example Request (Python)</h3>
+        
+        <div class="code-block">
+import requests
+
+url = "<span id="pythonUrl">http://localhost:8000</span>/api/extract"
+files = {"file": open("chart.png", "rb")}
+data = {
+    "chart_type": "Auto",
+    "debug": "false"
+}
+
+response = requests.post(url, files=files, data=data)
+result = response.json()
+
+print(f"Chart Type: {result['chart_type']}")
+print(f"Data Points: {len(result['data'])}")
+        </div>
+        
+        <h3>Example Request (JavaScript)</h3>
+        
+        <div class="code-block">
+const formData = new FormData();
+formData.append('file', fileInput.files[0]);
+formData.append('chart_type', 'Auto');
+formData.append('debug', 'false');
+
+fetch('<span id="jsUrl">http://localhost:8000</span>/api/extract', {
+    method: 'POST',
+    body: formData
+})
+.then(response => response.json())
+.then(data => {
+    console.log('Chart Type:', data.chart_type);
+    console.log('Data:', data.data);
+});
+        </div>
+        
+        <h3>Response Format</h3>
+        
+        <div class="response-example">
+            <h4>Success Response (Bar Chart)</h4>
+            <div class="code-block">
+{
+  "status": "success",
+  "chart_type": "Bar",
+  "data": [
+    {
+      "category": "2020",
+      "label": "Revenue",
+      "value": 150000,
+      "color": "#FF0000"
+    },
+    {
+      "category": "2021",
+      "label": "Revenue",
+      "value": 180000,
+      "color": "#FF0000"
+    }
+  ],
+  "metadata": {
+    "titles": {
+      "chart": "Annual Revenue",
+      "value_axis": "Amount ($)",
+      "category_axis": "Year"
+    },
+    "y_axis_range": {
+      "min": 0,
+      "max": 200000,
+      "source": "detected"
+    }
+  },
+  "csv_path": "output_fixed/result.csv"
+}
+            </div>
+        </div>
+        
+        <div class="response-example">
+            <h4>Success Response (Line Chart)</h4>
+            <div class="code-block">
+{
+  "status": "success",
+  "chart_type": "Line",
+  "data": [
+    {
+      "category": "Jan",
+      "label": "Sales",
+      "value": 45.5,
+      "x_pixel": 100,
+      "y_pixel": 200,
+      "color": "#0000FF"
+    }
+  ],
+  "metadata": { ... }
+}
+            </div>
+        </div>
+        
+        <div class="response-example">
+            <h4>Success Response (Pie Chart)</h4>
+            <div class="code-block">
+{
+  "status": "success",
+  "chart_type": "Pie",
+  "data": [
+    {
+      "category": "Product A",
+      "percentage": 35.5,
+      "angle": 127.8
+    },
+    {
+      "category": "Product B",
+      "percentage": 28.3,
+      "angle": 101.88
+    }
+  ],
+  "metadata": { ... }
+}
+            </div>
+        </div>
+        
+        <div class="response-example">
+            <h4>Error Response</h4>
+            <div class="code-block">
+{
+  "status": "error",
+  "error": "No file uploaded",
+  "message": "Please provide a chart image file"
+}
+            </div>
+        </div>
+        
+        <h3>Response Fields</h3>
+        
+        <table class="param-table">
+            <thead>
+                <tr>
+                    <th>Field</th>
+                    <th>Type</th>
+                    <th>Description</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td><code>status</code></td>
+                    <td>String</td>
+                    <td>"success" or "error"</td>
+                </tr>
+                <tr>
+                    <td><code>chart_type</code></td>
+                    <td>String</td>
+                    <td>Detected or specified chart type</td>
+                </tr>
+                <tr>
+                    <td><code>data</code></td>
+                    <td>Array</td>
+                    <td>Extracted data points (structure varies by chart type)</td>
+                </tr>
+                <tr>
+                    <td><code>metadata</code></td>
+                    <td>Object</td>
+                    <td>Additional information (titles, axis ranges, etc.)</td>
+                </tr>
+                <tr>
+                    <td><code>csv_path</code></td>
+                    <td>String</td>
+                    <td>Path to saved CSV file (if applicable)</td>
+                </tr>
+            </tbody>
+        </table>
+        
+        <h2>Debug Mode</h2>
+        
+        <div class="note">
+            <strong>⚠️ Note:</strong> When <code>debug=true</code>, the system will save intermediate processing images 
+            to the <code>debug_output/</code> directory on the server. This is useful for troubleshooting OCR issues 
+            with tilted or vertical X-axis labels.
+        </div>
+        
+        <p>Debug images include:</p>
+        <ul style="margin-left: 40px; margin-top: 10px;">
+            <li><code>xaxis_01_strip.png</code> - Extracted X-axis region</li>
+            <li><code>xaxis_02_binary.png</code> - Binary thresholded image</li>
+            <li><code>xaxis_02b_dilated.png</code> - Dilated image</li>
+            <li><code>xaxis_03_all_bboxes.png</code> - All detected text boxes</li>
+            <li><code>xaxis_04_merged_bboxes.png</code> - Merged text boxes</li>
+            <li><code>xaxis_05_bbox##_*.png</code> - Individual label crops with rotations</li>
+        </ul>
+        
+        <h2>Rate Limits</h2>
+        
+        <p>Currently no rate limits are enforced. For production use, consider implementing rate limiting.</p>
+        
+        <h2>Support</h2>
+        
+        <p>For issues or questions, please refer to the <a href="/docs" style="color: #667eea;">documentation</a>.</p>
+        
+        <a href="/" class="back-link">← Back to Upload</a>
+    </div>
+    
+    <script>
+        // Get current URL and populate all examples
+        const baseUrl = window.location.origin;
+        document.getElementById('baseUrl').textContent = baseUrl;
+        document.getElementById('curlUrl').textContent = baseUrl;
+        document.getElementById('pythonUrl').textContent = baseUrl;
+        document.getElementById('jsUrl').textContent = baseUrl;
+    </script>
+</body>
+</html>
