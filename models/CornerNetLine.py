@@ -130,4 +130,4 @@ class model(kp_line):
         )
 
 loss = AELossLine(pull_weight=1e-1, push_weight=1e-1, focal_loss=_neg_loss)
-from azureml.core.compute import ComputeTarget
+#from azureml.core.compute import ComputeTarget

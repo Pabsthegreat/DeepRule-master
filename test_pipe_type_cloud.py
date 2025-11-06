@@ -145,6 +145,18 @@ def Pre_load_nets(chart_type, id_cuda, data_dir, cache_dir, force_reload=False):
         path_bar = "testfile.test_CornerNetPureBar"
         testing_bar = importlib.import_module(path_bar).testing
         methods_local["Bar"] = [db_bar, nnet_bar, testing_bar]
+    
+    elif chart_type == "Line":
+        db_line, nnet_line = load_net(50000, "CornerNetLine", data_dir, cache_dir, id_cuda)
+        path_line = "testfile.test_CornerNetLine"
+        testing_line = importlib.import_module(path_line).testing
+        methods_local["Line"] = [db_line, nnet_line, testing_line]
+    
+    elif chart_type == "Pie":
+        db_pie, nnet_pie = load_net(50000, "CornerNetPurePie", data_dir, cache_dir, id_cuda)
+        path_pie = "testfile.test_CornerNetPurePie"
+        testing_pie = importlib.import_module(path_pie).testing
+        methods_local["Pie"] = [db_pie, nnet_pie, testing_pie]
 
     _methods_cache[cache_key] = methods_local
     methods = methods_local
@@ -152,24 +164,93 @@ def Pre_load_nets(chart_type, id_cuda, data_dir, cache_dir, force_reload=False):
 
 
 # ------------------------------------------------------------------
+# Auto-detection
+# ------------------------------------------------------------------
+
+def auto_detect_chart_type(image_path, data_dir, cache_dir, id_cuda=0):
+    """
+    Automatically detect chart type by running classification and checking 
+    the detected elements using a lightweight approach.
+    """
+    try:
+        img = cv2.imread(image_path)
+        if img is None:
+            return "Bar"  # Default fallback
+        
+        pil_img = Image.open(image_path).convert("RGB")
+        
+        # Load only the classifier model
+        db_cls, nnet_cls = load_net(50000, "CornerNetCls", data_dir, cache_dir, id_cuda)
+        path_cls = "testfile.test_CornerNetCls"
+        testing_cls = importlib.import_module(path_cls).testing
+        
+        with torch.no_grad():
+            cls_res = testing_cls(img, db_cls, nnet_cls, debug=False)
+            tls, brs = cls_res[1], cls_res[2]
+            _, raw_info = GroupCls(pil_img, tls, brs)
+            cls_info = {int(k): _to_box(v) for k, v in raw_info.items()}
+        
+        # Analyze image characteristics
+        H, W = img.shape[:2]
+        
+        # Check for circular shapes (pie chart indicator)
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        circles = cv2.HoughCircles(gray, cv2.HOUGH_GRADIENT, dp=1, minDist=H//4,
+                                   param1=50, param2=30, minRadius=H//8, maxRadius=H//2)
+        
+        has_circles = circles is not None and len(circles[0]) > 0
+        
+        # Check for horizontal lines (line chart indicator)
+        edges = cv2.Canny(gray, 50, 150, apertureSize=3)
+        lines = cv2.HoughLinesP(edges, 1, np.pi/180, threshold=100, minLineLength=W//4, maxLineGap=10)
+        
+        horizontal_lines = 0
+        if lines is not None:
+            for line in lines:
+                x1, y1, x2, y2 = line[0]
+                # Check if line is mostly horizontal
+                if abs(y2 - y1) < 20 and abs(x2 - x1) > W // 6:
+                    horizontal_lines += 1
+        
+        # Decision logic
+        if has_circles:
+            return "Pie"
+        elif horizontal_lines >= 3:  # Multiple horizontal lines suggest line chart
+            return "Line"
+        else:
+            return "Bar"  # Default to bar chart
+            
+    except Exception as e:
+        print(f"Auto-detection failed: {e}")
+        return "Bar"  # Default fallback
+
+
+# ------------------------------------------------------------------
 # OCR helpers
 # ------------------------------------------------------------------
 
 def ocr_result_full_image(image_path):
+    """
+    OCR the full image for general text extraction.
+    """
     os.environ.setdefault("TESSDATA_PREFIX", "/usr/share/tesseract-ocr/4.00/tessdata")
     img = cv2.imread(image_path)
     if img is None:
         raise RuntimeError(f"Cannot read {image_path}")
     rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
     pil = Image.fromarray(rgb)
-    data = pytesseract.image_to_data(pil, lang="eng", output_type=pytesseract.Output.DICT)
+    
     words = []
+    
+    # Normal orientation OCR
+    data = pytesseract.image_to_data(pil, lang="eng", output_type=pytesseract.Output.DICT)
     for i, txt in enumerate(data["text"]):
         txt = (txt or "").strip()
         if not txt:
             continue
         x, y, w, h = int(data["left"][i]), int(data["top"][i]), int(data["width"][i]), int(data["height"][i])
         words.append({"text": txt, "bbox": [x, y, x + w, y + h]})
+    
     return words
 
 def extract_titles_from_clsinfo(cls_info, word_infos):
@@ -206,8 +287,404 @@ def extract_axis_scale_from_clsinfo(image, cls_info):
     if not nums: return None, None
     return min(nums), max(nums)
 
-def extract_xaxis_labels(word_infos, cls_info, img_height):
-    """Extract X-axis labels (category labels below the plot area)"""
+def detect_xaxis_text_regions(image_path, plot_bbox, debug=False):
+    """
+    Detect individual text regions (bounding boxes) in the X-axis area using edge detection.
+    Returns list of bounding boxes (x, y, w, h) in the X-axis strip.
+    """
+    img = cv2.imread(image_path)
+    if img is None or plot_bbox is None:
+        return [], None, (0, 0)
+    
+    x1_plot, y1_plot, x2_plot, y2_plot = plot_bbox
+    H, W = img.shape[:2]
+    
+    # Extract region below plot
+    # Add small buffer below plot line to avoid capturing plot border
+    y_start = int(y2_plot) + 5  # Skip 5 pixels to avoid plot border/gridline
+    y_end = H
+    x_start = max(int(x1_plot)-5, 0)
+    x_end = min(W, int(x2_plot) + 20)
+    
+    if y_start >= y_end or x_start >= x_end:
+        return [], None, (0, 0)
+    
+    xaxis_strip = img[y_start:y_end, x_start:x_end].copy()
+    
+    if debug:
+        print(f"\n{'='*80}")
+        print(f"STEP 1: X-AXIS REGION EXTRACTION")
+        print(f"{'='*80}")
+        print(f"  Plot bbox: x={x1_plot:.0f}->{x2_plot:.0f}, y={y1_plot:.0f}->{y2_plot:.0f}")
+        print(f"  X-axis strip: x={x_start}->{x_end}, y={y_start}->{y_end}")
+        print(f"  Strip size: {xaxis_strip.shape[1]}x{xaxis_strip.shape[0]} pixels")
+        
+        # Save the extracted strip
+        debug_strip_path = "debug_output/xaxis_01_strip.png"
+        import os
+        os.makedirs("debug_output", exist_ok=True)
+        cv2.imwrite(debug_strip_path, xaxis_strip)
+        print(f"  Saved strip: {debug_strip_path}")
+    
+    # Convert to grayscale and apply threshold to find text
+    gray = cv2.cvtColor(xaxis_strip, cv2.COLOR_BGR2GRAY)
+    _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+    
+    # Dilate to connect nearby text components (important for separated characters)
+    # Use lighter dilation to avoid over-connecting separate labels
+    # First: horizontal dilation to connect characters within words
+    kernel_h = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 1))  # Thinner horizontal
+    dilated = cv2.dilate(binary, kernel_h, iterations=1)
+    
+    # Second: vertical dilation to capture full height
+    kernel_v = cv2.getStructuringElement(cv2.MORPH_RECT, (1, 8))  # Thinner vertical
+    dilated = cv2.dilate(dilated, kernel_v, iterations=1)
+    
+    # Third: small ellipse for slight diagonal connections
+    kernel_diag = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))  # Smaller ellipse
+    dilated = cv2.dilate(dilated, kernel_diag, iterations=1)
+    
+    if debug:
+        print(f"\n{'='*80}")
+        print(f"STEP 2: BINARY THRESHOLDING & DILATION")
+        print(f"{'='*80}")
+        debug_binary_path = "debug_output/xaxis_02_binary.png"
+        cv2.imwrite(debug_binary_path, binary)
+        print(f"  Saved binary image: {debug_binary_path}")
+        debug_dilated_path = "debug_output/xaxis_02b_dilated.png"
+        cv2.imwrite(debug_dilated_path, dilated)
+        print(f"  Saved dilated image: {debug_dilated_path}")
+    
+    # Find contours on dilated image
+    contours, _ = cv2.findContours(dilated, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    
+    if debug:
+        print(f"  Found {len(contours)} contours")
+    
+    # Get bounding boxes and filter by size
+    bboxes = []
+    for contour in contours:
+        x, y, w, h = cv2.boundingRect(contour)
+        # Filter out very small noise
+        if w > 5 and h > 5:
+            bboxes.append((x, y, w, h, x + w // 2))  # Include center x for sorting
+    
+    if debug:
+        print(f"  Filtered to {len(bboxes)} bboxes (removed noise < 5x5 pixels)")
+        
+        # Draw all detected bboxes
+        debug_contours = xaxis_strip.copy()
+        for i, (x, y, w, h, cx) in enumerate(bboxes):
+            cv2.rectangle(debug_contours, (x, y), (x+w, y+h), (0, 255, 0), 2)
+            cv2.putText(debug_contours, str(i), (x, y-5), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 255, 0), 1)
+        debug_contours_path = "debug_output/xaxis_03_all_bboxes.png"
+        cv2.imwrite(debug_contours_path, debug_contours)
+        print(f"  Saved all bboxes: {debug_contours_path}")
+    
+    # Sort by X position
+    bboxes.sort(key=lambda b: b[4])
+    
+    # Merge boxes based on overlap threshold
+    # Only merge if they overlap by at least 50% (likely same text)
+    def calculate_overlap(bbox1, bbox2):
+        """Calculate the overlap percentage between two bboxes"""
+        x1, y1, w1, h1 = bbox1
+        x2, y2, w2, h2 = bbox2
+        
+        # Calculate intersection
+        x_left = max(x1, x2)
+        y_top = max(y1, y2)
+        x_right = min(x1 + w1, x2 + w2)
+        y_bottom = min(y1 + h1, y2 + h2)
+        
+        if x_right < x_left or y_bottom < y_top:
+            return 0.0  # No overlap
+        
+        intersection_area = (x_right - x_left) * (y_bottom - y_top)
+        bbox1_area = w1 * h1
+        bbox2_area = w2 * h2
+        smaller_area = min(bbox1_area, bbox2_area)
+        
+        # Return overlap as percentage of smaller bbox
+        return intersection_area / smaller_area if smaller_area > 0 else 0.0
+    
+    merged = []
+    for bbox in bboxes:
+        x, y, w, h, cx = bbox
+        current_bbox = (x, y, w, h)
+        
+        # Check if this bbox should be merged with the last merged bbox
+        should_merge = False
+        if merged:
+            prev_x, prev_y, prev_w, prev_h = merged[-1]
+            prev_bbox = (prev_x, prev_y, prev_w, prev_h)
+            overlap = calculate_overlap(current_bbox, prev_bbox)
+            
+            # Only merge if BOTH conditions are met:
+            # 1. High overlap (>= 70% to be very conservative)
+            # 2. Similar Y position (same horizontal line, not tilted text stacked vertically)
+            horizontal_gap = x - (prev_x + prev_w)
+            vertical_gap = abs(y - prev_y)
+            
+            # For tilted text, bboxes will have large vertical separation
+            # Only merge if on same line (vertical_gap < 10) AND high overlap
+            if overlap >= 0.7 and vertical_gap < 10:
+                should_merge = True
+        
+        if should_merge:
+            # Merge with previous
+            prev_x, prev_y, prev_w, prev_h = merged[-1]
+            new_x = min(prev_x, x)
+            new_y = min(prev_y, y)
+            new_x2 = max(prev_x + prev_w, x + w)
+            new_y2 = max(prev_y + prev_h, y + h)
+            merged[-1] = (new_x, new_y, new_x2 - new_x, new_y2 - new_y)
+            if debug:
+                print(f"    Merged: Bbox at x={x} merged with previous (overlap={overlap:.2f}, v_gap={vertical_gap})")
+        else:
+            merged.append((x, y, w, h))
+    
+    if debug:
+        print(f"\n{'='*80}")
+        print(f"STEP 3: BBOX MERGING (70% overlap + same line)")
+        print(f"{'='*80}")
+        print(f"  Merged nearby boxes: {len(bboxes)} -> {len(merged)} bboxes")
+        print(f"  Note: Boxes merged only if overlap ≥ 70% AND vertical gap < 10px")
+        
+        # Draw merged bboxes
+        debug_merged = xaxis_strip.copy()
+        for i, (x, y, w, h) in enumerate(merged):
+            cv2.rectangle(debug_merged, (x, y), (x+w, y+h), (255, 0, 0), 2)
+            cv2.putText(debug_merged, f"#{i}", (x, y-5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 2)
+        debug_merged_path = "debug_output/xaxis_04_merged_bboxes.png"
+        cv2.imwrite(debug_merged_path, debug_merged)
+        print(f"  Saved merged bboxes: {debug_merged_path}")
+        
+        for i, (x, y, w, h) in enumerate(merged):
+            print(f"    Bbox #{i}: x={x}, y={y}, w={w}, h={h}")
+    
+    return merged, xaxis_strip, (x_start, y_start)
+
+def ocr_xaxis_region_with_rotation(image_path, plot_bbox, debug=False):
+    """
+    OCR specifically the X-axis region by detecting individual text bounding boxes,
+    rotating each one separately to eliminate overlap and noise.
+    plot_bbox: (x1, y1, x2, y2) - the plot area coordinates
+    Returns: list of word dicts with 'text' and 'bbox' in original image coordinates
+    """
+    img = cv2.imread(image_path)
+    if img is None or plot_bbox is None:
+        return []
+    
+    # Detect individual text regions
+    text_bboxes, xaxis_strip, (x_offset, y_offset) = detect_xaxis_text_regions(image_path, plot_bbox, debug=debug)
+    
+    if not text_bboxes:
+        if debug:
+            print("\n⚠️  No text bboxes detected in X-axis region!")
+        return []
+    
+    if debug:
+        print(f"\n{'='*80}")
+        print(f"STEP 4: INDIVIDUAL BBOX OCR WITH ROTATION")
+        print(f"{'='*80}")
+        print(f"  Processing {len(text_bboxes)} text regions...")
+    
+    all_words = []
+    
+    # Process each detected text region individually
+    for bbox_idx, (x, y, w, h) in enumerate(text_bboxes):
+        # Add generous padding around the bbox (important for rotated OCR)
+        # Wider horizontal padding and more upward vertical padding
+        pad_x = 25  # More horizontal padding
+        pad_y_top = 15  # Extra padding upward (can touch plot line)
+        pad_y_bottom = 0  # Less padding downward
+        x1 = max(0, x - pad_x)
+        y1 = max(0, y - pad_y_top)
+        x2 = min(xaxis_strip.shape[1], x + w + pad_x)
+        y2 = min(xaxis_strip.shape[0], y + h + pad_y_bottom)
+        
+        text_crop = xaxis_strip[y1:y2, x1:x2]
+        
+        if text_crop.size == 0:
+            continue
+        
+        crop_h, crop_w = text_crop.shape[:2]
+        
+        if debug:
+            print(f"\n  --- Bbox #{bbox_idx} ---")
+            print(f"      Position: x={x}, y={y}, w={w}, h={h}")
+            print(f"      Crop size: {crop_w}x{crop_h}")
+            debug_crop_path = f"debug_output/xaxis_05_bbox{bbox_idx:02d}_crop.png"
+            cv2.imwrite(debug_crop_path, text_crop)
+            print(f"      Saved crop: {debug_crop_path}")
+        
+        best_text = None
+        best_conf = 0
+        best_bbox_full = None
+        best_orientation = None
+        
+        # Helper function to rotate image by arbitrary angle
+        def rotate_image(image, angle):
+            """Rotate image by arbitrary angle (positive = CCW)"""
+            (h, w) = image.shape[:2]
+            center = (w // 2, h // 2)
+            M = cv2.getRotationMatrix2D(center, angle, 1.0)
+            # Calculate new dimensions to avoid clipping
+            cos = abs(M[0, 0])
+            sin = abs(M[0, 1])
+            new_w = int((h * sin) + (w * cos))
+            new_h = int((h * cos) + (w * sin))
+            M[0, 2] += (new_w / 2) - center[0]
+            M[1, 2] += (new_h / 2) - center[1]
+            rotated = cv2.warpAffine(image, M, (new_w, new_h), 
+                                     flags=cv2.INTER_CUBIC,
+                                     borderMode=cv2.BORDER_CONSTANT,
+                                     borderValue=(255, 255, 255))
+            return rotated
+        
+        # Check if text is likely already horizontal (width > height)
+        # If so, try normal orientation first and only rotate if confidence is low
+        is_likely_horizontal = crop_w > crop_h * 1.2
+        
+        # Try multiple orientations on this individual crop
+        if is_likely_horizontal:
+            # Try normal first, only rotate if confidence is poor
+            orientations_to_try = [
+                ("normal", text_crop, 0),
+            ]
+            try_rotations = False  # Will be set to True if normal has low confidence
+        else:
+            # Text is vertical/tilted, try all orientations including 45° angles
+            orientations_to_try = [
+                ("normal", text_crop, 0),
+                ("45_ccw", rotate_image(text_crop, 45), 45),
+                ("90_ccw", cv2.rotate(text_crop, cv2.ROTATE_90_COUNTERCLOCKWISE), 90),
+                ("45_cw", rotate_image(text_crop, -45), -45),
+                ("90_cw", cv2.rotate(text_crop, cv2.ROTATE_90_CLOCKWISE), -90),
+            ]
+            try_rotations = False
+        
+        if debug:
+            if is_likely_horizontal:
+                print(f"      Text appears horizontal (w={crop_w} > h={crop_h}), trying normal first...")
+            else:
+                print(f"      Text appears tilted/vertical (w={crop_w} ≤ h={crop_h}), trying {len(orientations_to_try)} orientations (0°, ±45°, ±90°)...")
+        
+        for orientation_name, rotated_crop, angle in orientations_to_try:
+            try:
+                if debug:
+                    # Save rotated version
+                    debug_rot_path = f"debug_output/xaxis_05_bbox{bbox_idx:02d}_{orientation_name}.png"
+                    cv2.imwrite(debug_rot_path, rotated_crop)
+                
+                rgb = cv2.cvtColor(rotated_crop, cv2.COLOR_BGR2RGB)
+                pil_crop = Image.fromarray(rgb)
+                
+                # OCR with confidence scores
+                data = pytesseract.image_to_data(pil_crop, lang="eng", output_type=pytesseract.Output.DICT)
+                
+                found_texts = []
+                for i, txt in enumerate(data["text"]):
+                    txt = (txt or "").strip()
+                    if not txt or len(txt) < 2:
+                        continue
+                    
+                    conf = int(data["conf"][i]) if data["conf"][i] != -1 else 0
+                    found_texts.append((txt, conf))
+                    
+                    # Pick the result with highest confidence
+                    if conf > best_conf:
+                        best_conf = conf
+                        best_text = txt
+                        best_orientation = orientation_name
+                        
+                        # Calculate bbox in original image coordinates
+                        if angle == 0:  # Normal
+                            best_bbox_full = [x_offset + x1, y_offset + y1, x_offset + x2, y_offset + y2]
+                        else:  # Rotated - use the detected text region position
+                            best_bbox_full = [x_offset + x, y_offset + y, x_offset + x + w, y_offset + y + h]
+                
+                if debug and found_texts:
+                    print(f"        {orientation_name:10s}: {found_texts}")
+            except Exception as e:
+                if debug:
+                    print(f"        {orientation_name:10s}: ERROR - {e}")
+                continue
+        
+        # If text appeared horizontal but confidence is low, try rotations as fallback
+        if is_likely_horizontal and best_conf < 50 and not try_rotations:
+            if debug:
+                print(f"      Low confidence ({best_conf}), trying rotations as fallback...")
+            
+            # Add rotated orientations and retry (including 45° for tilted text)
+            rotated_orientations = [
+                ("45_ccw", rotate_image(text_crop, 45), 45),
+                ("90_ccw", cv2.rotate(text_crop, cv2.ROTATE_90_COUNTERCLOCKWISE), 90),
+                ("45_cw", rotate_image(text_crop, -45), -45),
+                ("90_cw", cv2.rotate(text_crop, cv2.ROTATE_90_CLOCKWISE), -90),
+            ]
+            
+            for orientation_name, rotated_crop, angle in rotated_orientations:
+                try:
+                    if debug:
+                        debug_rot_path = f"debug_output/xaxis_05_bbox{bbox_idx:02d}_{orientation_name}.png"
+                        cv2.imwrite(debug_rot_path, rotated_crop)
+                    
+                    rgb = cv2.cvtColor(rotated_crop, cv2.COLOR_BGR2RGB)
+                    pil_crop = Image.fromarray(rgb)
+                    data = pytesseract.image_to_data(pil_crop, lang="eng", output_type=pytesseract.Output.DICT)
+                    
+                    found_texts = []
+                    for i, txt in enumerate(data["text"]):
+                        txt = (txt or "").strip()
+                        if not txt or len(txt) < 2:
+                            continue
+                        
+                        conf = int(data["conf"][i]) if data["conf"][i] != -1 else 0
+                        found_texts.append((txt, conf))
+                        
+                        if conf > best_conf:
+                            best_conf = conf
+                            best_text = txt
+                            best_orientation = orientation_name
+                            best_bbox_full = [x_offset + x, y_offset + y, x_offset + x + w, y_offset + y + h]
+                    
+                    if debug and found_texts:
+                        print(f"        {orientation_name:10s}: {found_texts}")
+                except Exception as e:
+                    if debug:
+                        print(f"        {orientation_name:10s}: ERROR - {e}")
+                    continue
+        
+        # Add the best result for this bbox
+        if best_text and best_bbox_full:
+            all_words.append({
+                "text": best_text,
+                "bbox": best_bbox_full
+            })
+            if debug:
+                print(f"      ✓ BEST: '{best_text}' (conf: {best_conf}, orientation: {best_orientation})")
+        else:
+            if debug:
+                print(f"      ✗ No text detected in any orientation")
+    
+    if debug:
+        print(f"\n{'='*80}")
+        print(f"STEP 5: FINAL RESULTS")
+        print(f"{'='*80}")
+        print(f"  Detected {len(all_words)} X-axis labels:")
+        for i, word in enumerate(all_words):
+            print(f"    [{i}] '{word['text']}' at bbox {word['bbox']}")
+        print(f"{'='*80}\n")
+    
+    return all_words
+
+def extract_xaxis_labels(word_infos, cls_info, img_height, image_path=None):
+    """
+    Extract X-axis labels (category labels below the plot area).
+    Handles horizontal, tilted, and vertical labels.
+    """
     if 5 not in cls_info:
         return []
     
@@ -217,11 +694,23 @@ def extract_xaxis_labels(word_infos, cls_info, img_height):
     
     x1_plot, y1_plot, x2_plot, y2_plot = plot
     
+    # If image_path provided, also do rotation OCR specifically for X-axis region
+    extra_words = []
+    if image_path:
+        print(f"\n[X-axis OCR] Using plot coordinates: {plot}")
+        extra_words = ocr_xaxis_region_with_rotation(image_path, plot, debug=True)
+        # Merge extra words into word_infos
+        all_word_infos = list(word_infos) + extra_words
+    else:
+        all_word_infos = word_infos
+    
     # Look for text below the plot area
     candidate_words = []
-    for w in word_infos:
+    for w in all_word_infos:
         x_center = (w["bbox"][0] + w["bbox"][2]) / 2
         y_center = (w["bbox"][1] + w["bbox"][3]) / 2
+        bbox_width = w["bbox"][2] - w["bbox"][0]
+        bbox_height = w["bbox"][3] - w["bbox"][1]
         
         # Check if text is below plot area and horizontally within it
         text = w["text"].strip()
@@ -230,9 +719,16 @@ def extract_xaxis_labels(word_infos, cls_info, img_height):
         # Allow years (4-digit numbers) and other integers as they are likely X-axis labels
         is_percentage = '%' in text and '.' in text  # Only exclude decimal percentages
         
-        if (y_center > y2_plot and 
-            x_center >= x1_plot and 
-            x_center <= x2_plot and
+        # For vertical/tilted text, height will be > width
+        # Relax the position constraints for vertical labels
+        is_likely_vertical = bbox_height > bbox_width * 1.5
+        
+        # Extended search area for vertical labels
+        vertical_tolerance = 100 if is_likely_vertical else 0
+        
+        if (y_center > y2_plot - vertical_tolerance and 
+            x_center >= x1_plot - 20 and  # Allow slight overhang
+            x_center <= x2_plot + 20 and
             len(text) >= 2 and
             not is_percentage):  # Not a percentage label
             candidate_words.append({
@@ -243,7 +739,8 @@ def extract_xaxis_labels(word_infos, cls_info, img_height):
                 "y_pos": y_center,
                 "y_top": w["bbox"][1],
                 "y_bottom": w["bbox"][3],
-                "bbox": w["bbox"]
+                "bbox": w["bbox"],
+                "is_vertical": is_likely_vertical
             })
     
     # Find the main X-axis label row (typically the one closest to plot but not too far)
@@ -264,49 +761,32 @@ def extract_xaxis_labels(word_infos, cls_info, img_height):
     # Sort main row by X position
     main_row_words.sort(key=lambda x: x["x_left"])
     
-    # Group words that are horizontally close together
-    # Use adaptive gap detection: small gaps = same label, large gaps = different labels
-    grouped_labels = []
-    i = 0
-    while i < len(main_row_words):
-        current = main_row_words[i]
-        group = [current]
-        j = i + 1
-        
-        # Look for nearby words on the same line
-        while j < len(main_row_words):
-            next_word = main_row_words[j]
-            # Check if horizontally close
-            x_gap = next_word["x_left"] - current["x_right"]
-            
-            # Small gap means same label, but break on large gaps
-            # Typical word spacing is < 10px, label separation is > 30px
-            if x_gap < 15 and x_gap > -5:  # Very close = same label
-                group.append(next_word)
-                current = next_word
-                j += 1
-            elif x_gap >= 15:  # Large gap = new label
-                break
-            else:
-                j += 1
-        
-        # Combine grouped words
-        if group:
-            combined_text = " ".join([w["text"] for w in group])
-            avg_x = sum([w["x_center"] for w in group]) / len(group)
-            grouped_labels.append({
-                "text": combined_text,
-                "x_center": avg_x,
-                "y_pos": group[0]["y_pos"],
-                "bbox": [group[0]["bbox"][0], group[0]["bbox"][1], 
-                        group[-1]["bbox"][2], group[-1]["bbox"][3]]
-            })
-        
-        i = j if j > i + 1 else i + 1
+    # Debug: Show detected X-axis candidates
+    if main_row_words:
+        print(f"  X-axis label candidates: {[w['text'] for w in main_row_words]}")
+    
+    # Convert each detected word into a label (don't group them)
+    # Since we're extracting individual rotated labels, each one is already separate
+    final_labels = []
+    for word in main_row_words:
+        final_labels.append({
+            "text": word["text"],
+            "x_center": word["x_center"],
+            "y_pos": word["y_pos"],
+            "bbox": word["bbox"]
+        })
     
     # Sort by X position (left to right)
-    grouped_labels.sort(key=lambda x: x["x_center"])
-    return grouped_labels
+    final_labels.sort(key=lambda x: x["x_center"])
+    
+    # Debug: Show what we're returning
+    print(f"\n[extract_xaxis_labels] Returning {len(final_labels)} labels:")
+    for i, label in enumerate(final_labels[:10]):  # Show first 10
+        print(f"  [{i}] '{label['text']}' at x={label['x_center']:.1f}")
+    if len(final_labels) > 10:
+        print(f"  ... and {len(final_labels) - 10} more")
+    
+    return final_labels
 
 def map_labels_to_bars(bars, x_labels):
     """Map X-axis labels to bars based on horizontal alignment"""
@@ -334,6 +814,50 @@ def map_labels_to_bars(bars, x_labels):
     
     return bar_label_map
 
+def map_labels_to_line_points(line_points, x_labels, plot_bounds=None):
+    """
+    Map X-axis labels to line chart points based on horizontal alignment.
+    Returns dict mapping point index to X-axis label.
+    """
+    if not x_labels or not line_points:
+        return {}
+    
+    point_label_map = {}
+    
+    # Get plot X boundaries if available to normalize positions
+    x_min, x_max = None, None
+    if plot_bounds:
+        x_min = plot_bounds[0]
+        x_max = plot_bounds[2]
+    
+    # Create bins/regions for each X-axis label
+    # Assume labels are evenly spaced or use their actual positions
+    if len(x_labels) > 1:
+        # Sort labels by X position
+        sorted_labels = sorted(x_labels, key=lambda l: l["x_center"])
+        
+        # For each point, find the nearest X-axis label
+        for i, point in enumerate(line_points):
+            if isinstance(point, dict):
+                bbox = point.get('bbox', [0, 0, 0, 0])
+                point_x = bbox[0] + bbox[2] / 2.0
+                
+                # Find closest label
+                min_dist = float('inf')
+                closest_label = None
+                
+                for label in sorted_labels:
+                    dist = abs(point_x - label["x_center"])
+                    if dist < min_dist:
+                        min_dist = dist
+                        closest_label = label["text"]
+                
+                # Assign if reasonably close
+                if min_dist < 80:  # Threshold for line charts (can be tighter)
+                    point_label_map[i] = closest_label
+    
+    return point_label_map
+
 
 # ------------------------------------------------------------------
 # Legend / color matching
@@ -342,44 +866,185 @@ def map_labels_to_bars(bars, x_labels):
 def rgb_to_hex(rgb):
     return "#{:02x}{:02x}{:02x}".format(*[int(v) for v in rgb])
 
-def bar_color(img, box):
-    x1,y1,x2,y2 = [int(v) for v in box]
+def extract_dominant_color(img, box, use_median=True):
+    """
+    Extract dominant color from a region using median (more robust to outliers)
+    or mode (most common color). Also filters out white/gray background pixels.
+    """
+    x1, y1, x2, y2 = [int(v) for v in box]
     roi = img[y1:y2, x1:x2]
-    if roi.size == 0: return (0,0,0)
-    h,w = roi.shape[:2]
-    ys, ye = int(h*0.2), int(h*0.8)
-    xs, xe = int(w*0.2), int(w*0.8)
+    if roi.size == 0: 
+        return (0, 0, 0)
+    
+    # Use center 60% to avoid edges/borders
+    h, w = roi.shape[:2]
+    ys, ye = int(h * 0.2), int(h * 0.8)
+    xs, xe = int(w * 0.2), int(w * 0.8)
     core = roi[ys:ye, xs:xe]
-    bgr = core.reshape(-1,3).mean(axis=0)
-    return (bgr[2], bgr[1], bgr[0])
+    
+    if core.size == 0:
+        core = roi
+    
+    # Reshape to list of pixels
+    pixels = core.reshape(-1, 3).astype(np.float32)
+    
+    # Filter out near-white pixels (background) - BGR format
+    # Keep pixels where at least one channel is significantly different from others
+    mask = np.any(np.abs(pixels - pixels.mean(axis=1, keepdims=True)) > 30, axis=1)
+    
+    # Also filter out very light pixels (likely background)
+    brightness_mask = pixels.mean(axis=1) < 240
+    mask = mask & brightness_mask
+    
+    if mask.sum() > 0:
+        filtered_pixels = pixels[mask]
+    else:
+        filtered_pixels = pixels
+    
+    if use_median:
+        # Median is more robust to outliers
+        bgr = np.median(filtered_pixels, axis=0)
+    else:
+        # Mean color
+        bgr = np.mean(filtered_pixels, axis=0)
+    
+    # Convert BGR to RGB
+    return (int(bgr[2]), int(bgr[1]), int(bgr[0]))
+
+def bar_color(img, box):
+    """Extract color from bar chart bar"""
+    return extract_dominant_color(img, box, use_median=True)
+
+def point_color(img, x, y, radius=4):
+    """
+    Extract color from a point on a line chart.
+    Uses a focused sample to get accurate line color.
+    """
+    H, W = img.shape[:2]
+    x, y = int(x), int(y)
+    
+    # Get small region directly at the point
+    x1 = max(0, x - radius)
+    y1 = max(0, y - radius)
+    x2 = min(W - 1, x + radius)
+    y2 = min(H - 1, y + radius)
+    
+    roi = img[y1:y2, x1:x2]
+    if roi.size == 0:
+        return (0, 0, 0)
+    
+    # Get all pixels in the small region
+    pixels = roi.reshape(-1, 3).astype(np.float32)
+    
+    # Filter out very bright pixels (white background/grid)
+    brightness = pixels.mean(axis=1)
+    mask = brightness < 250
+    
+    if mask.sum() > 0:
+        filtered_pixels = pixels[mask]
+        # Use median to avoid outliers
+        bgr = np.median(filtered_pixels, axis=0)
+        return (int(bgr[2]), int(bgr[1]), int(bgr[0]))
+    else:
+        # If all pixels are bright, just use median of all
+        bgr = np.median(pixels, axis=0)
+        return (int(bgr[2]), int(bgr[1]), int(bgr[0]))
 
 def find_legend_pairs(img, words):
+    """
+    Find legend items by looking for text labels with colored markers.
+    Improved to search multiple regions and use better color extraction.
+    """
     H, W = img.shape[:2]
     legend = []
-    for w in words:
-        x1,y1,x2,y2 = w["bbox"]
-        if x1 >= int(W*0.65) and len(w["text"]) >= 2:
-            cx = max(0, x1 - 12)
-            cy = int((y1+y2)/2)
-            sx1, sy1 = max(0, cx-6), max(0, cy-6)
-            sx2, sy2 = min(W-1, cx+6), min(H-1, cy+6)
-            patch = img[sy1:sy2, sx1:sx2]
-            if patch.size == 0: continue
-            bgr = patch.reshape(-1,3).mean(axis=0)
-            rgb = (bgr[2], bgr[1], bgr[0])
-            legend.append({"text": w["text"], "rgb": rgb, "hex": rgb_to_hex(rgb)})
+    
+    # Search in right side (most common) and top/bottom regions
+    search_regions = [
+        ("right", lambda x1, y1: x1 >= int(W * 0.65)),  # Right 35%
+        ("top-right", lambda x1, y1: x1 >= int(W * 0.50) and y1 <= int(H * 0.20)),  # Top-right
+        ("bottom", lambda x1, y1: y1 >= int(H * 0.85)),  # Bottom 15%
+    ]
+    
+    seen_texts = set()
+    
+    for region_name, condition in search_regions:
+        for w in words:
+            x1, y1, x2, y2 = w["bbox"]
+            text = w["text"].strip()
+            
+            # Skip short text, numbers, and already seen labels
+            if len(text) < 2 or text in seen_texts:
+                continue
+            if text.replace('.', '').replace(',', '').replace('%', '').isdigit():
+                continue
+            
+            if not condition(x1, y1):
+                continue
+            
+            # Look for color marker to the left of text
+            marker_found = False
+            for offset in [12, 18, 24, 30]:  # Try multiple distances
+                cx = max(0, x1 - offset)
+                cy = int((y1 + y2) / 2)
+                
+                # Sample a small square around the marker position
+                sx1, sy1 = max(0, cx - 6), max(0, cy - 6)
+                sx2, sy2 = min(W - 1, cx + 6), min(H - 1, cy + 6)
+                patch = img[sy1:sy2, sx1:sx2]
+                
+                if patch.size == 0:
+                    continue
+                
+                # Extract color using improved method
+                rgb = extract_dominant_color(img, (sx1, sy1, sx2, sy2), use_median=True)
+                
+                # Check if this is a valid color (not white/gray background)
+                r, g, b = rgb
+                brightness = (r + g + b) / 3
+                variance = max(abs(r - g), abs(g - b), abs(r - b))
+                
+                # Valid colored marker: not too bright and has color variance
+                if brightness < 220 and (variance > 20 or brightness < 150):
+                    legend.append({
+                        "text": text,
+                        "rgb": rgb,
+                        "hex": rgb_to_hex(rgb),
+                        "region": region_name
+                    })
+                    seen_texts.add(text)
+                    marker_found = True
+                    break
+            
+            if marker_found:
+                continue
+    
     return legend
 
-def closest_legend(rgb, legend):
-    if not legend: return None
-    bx,by,bz = rgb
-    best, best_d = None, 1e9
+def closest_legend(rgb, legend, max_distance=10000):
+    """
+    Find closest legend item by color with improved matching.
+    Uses Euclidean distance in RGB space with threshold.
+    """
+    if not legend:
+        return None
+    
+    r1, g1, b1 = rgb
+    best, best_d = None, float('inf')
+    
     for item in legend:
-        rx,ry,rz = item["rgb"]
-        d = (bx-rx)**2+(by-ry)**2+(bz-rz)**2
-        if d<best_d:
-            best,best_d=item,d
-    return best
+        r2, g2, b2 = item["rgb"]
+        
+        # Euclidean distance in RGB space
+        distance = (r1 - r2)**2 + (g1 - g2)**2 + (b1 - b2)**2
+        
+        if distance < best_d:
+            best, best_d = item, distance
+    
+    # Only return match if distance is reasonable (not too far apart)
+    if best_d < max_distance:
+        return best
+    
+    return None
 
 
 # ------------------------------------------------------------------
@@ -412,6 +1077,9 @@ def run_on_image(image_path, chart_type="Bar", save_path=None, methods_override=
         y_min, y_max = extract_axis_scale_from_clsinfo(img, cls_info)
 
         bars_raw = []
+        lines_raw = []
+        pie_segments = []
+        
         if chart_type == "Bar" and "Bar" in model_bundle:
             bdb, bnet, bfn = model_bundle["Bar"]
             bres = bfn(img, bdb, bnet, debug=False)
@@ -421,10 +1089,42 @@ def run_on_image(image_path, chart_type="Bar", save_path=None, methods_override=
             bars_raw = GroupBarRaw(pil_img_copy, tls_b, brs_b)
             if return_images:
                 overlay_b64 = _encode_image_to_base64(pil_img_copy)
+        
+        elif chart_type == "Line" and "Line" in model_bundle:
+            ldb, lnet, lfn = model_bundle["Line"]
+            lres = lfn(img, ldb, lnet, debug=False)
+            keys_raw, hybrids_raw = lres[0], lres[1]
+            # Convert cv2 image to PIL for GroupQuiryRaw
+            pil_img_copy = pil_img.copy() if hasattr(pil_img, 'copy') else Image.fromarray(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
+            # GroupQuiryRaw returns (image, quiries, keys, hybrids)
+            result_line = GroupQuiryRaw(pil_img_copy, keys_raw, hybrids_raw)
+            if result_line and len(result_line) == 4:
+                pil_img_copy, quiries, line_keys, line_hybrids = result_line
+                lines_raw = line_keys  # Extract the key points from lines
+            else:
+                lines_raw = []
+            if return_images:
+                overlay_b64 = _encode_image_to_base64(pil_img_copy)
+        
+        elif chart_type == "Pie" and "Pie" in model_bundle:
+            pdb, pnet, pfn = model_bundle["Pie"]
+            pres = pfn(img, pdb, pnet, debug=False)
+            tls_p, brs_p = pres[0], pres[1]
+            # Convert cv2 image to PIL for GroupPie
+            pil_img_copy = pil_img.copy() if hasattr(pil_img, 'copy') else Image.fromarray(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
+            # GroupPie returns (annotated_image, list_of_angles)
+            result_pie = GroupPie(pil_img_copy, tls_p, brs_p)
+            if result_pie and len(result_pie) == 2:
+                pil_img_copy, pie_angles = result_pie
+                pie_segments = pie_angles  # List of angles (in degrees)
+            else:
+                pie_segments = []
+            if return_images:
+                overlay_b64 = _encode_image_to_base64(pil_img_copy)
 
-        # Extract X-axis labels (category labels)
-        x_axis_labels = extract_xaxis_labels(words, cls_info, img.shape[0])
-        bar_x_labels = map_labels_to_bars(bars_raw, x_axis_labels)
+        # Extract X-axis labels (category labels) - mainly for bar/line charts
+        x_axis_labels = extract_xaxis_labels(words, cls_info, img.shape[0], image_path)
+        bar_x_labels = map_labels_to_bars(bars_raw, x_axis_labels) if chart_type == "Bar" else {}
         
         legend_items = find_legend_pairs(img, words)
 
@@ -738,8 +1438,116 @@ def run_on_image(image_path, chart_type="Bar", save_path=None, methods_override=
             if a is not None and b is not None:
                 return float(a * y + b)
             return None
+        
+        # Warn if Y-axis calibration failed for line/bar charts
+        if chart_type in ["Line", "Bar"] and a is None:
+            print(f"\n⚠️  WARNING: Y-axis calibration failed for {chart_type} chart!")
+            print(f"   - No Y-axis tick labels detected")
+            print(f"   - Y-values will be shown as N/A")
+            print(f"   - Check if Y-axis labels are visible and clear in the image\n")
 
         rows = []
+        
+        # Process Pie chart data
+        if chart_type == "Pie" and pie_segments:
+            # pie_segments contains angles in degrees for each segment
+            # Calculate percentages from angles
+            # For pie charts, try to extract colors from the center region
+            H, W = img.shape[:2]
+            center_x, center_y = W // 2, H // 2
+            
+            for i, angle in enumerate(pie_segments):
+                percentage = (angle / 360.0) * 100.0 if angle > 0 else 0.0
+                
+                # Try to extract color from pie segment
+                # Estimate angle position (this is approximate)
+                angle_offset = sum(pie_segments[:i]) if i > 0 else 0
+                mid_angle = angle_offset + angle / 2.0
+                
+                # Convert to radians and get point on the pie segment
+                angle_rad = np.radians(mid_angle - 90)  # -90 to start from top
+                radius = min(W, H) * 0.25  # Estimate pie radius
+                
+                sample_x = int(center_x + radius * np.cos(angle_rad))
+                sample_y = int(center_y + radius * np.sin(angle_rad))
+                
+                # Extract color from this point
+                rgb = point_color(img, sample_x, sample_y, radius=8)
+                match = closest_legend(rgb, legend_items)
+                
+                rows.append({
+                    "segment_index": i + 1,
+                    "category": match["text"] if match else "",
+                    "label": match["text"] if match else "",
+                    "color": match["hex"] if match else rgb_to_hex(rgb),
+                    "angle_degrees": round(angle, 2),
+                    "value": round(percentage, 2),
+                })
+        
+        # Process Line chart data
+        elif chart_type == "Line" and lines_raw:
+            # Map line points to X-axis labels
+            line_x_labels = map_labels_to_line_points(lines_raw, x_axis_labels, plot_region)
+            
+            # First pass: collect all points by series to sample colors better
+            series_points = {}
+            for i, point in enumerate(lines_raw):
+                if isinstance(point, dict):
+                    category_id = point.get('category_id', 0)
+                    if category_id not in series_points:
+                        series_points[category_id] = []
+                    series_points[category_id].append((i, point))
+            
+            # Extract colors by sampling from each series
+            series_colors = {}
+            for category_id, points in series_points.items():
+                # Sample from middle point of the series for most accurate color
+                mid_idx = len(points) // 2
+                _, mid_point = points[mid_idx]
+                bbox = mid_point.get('bbox', [0, 0, 0, 0])
+                x_pixel = bbox[0] + bbox[2] / 2.0
+                y_pixel = bbox[1] + bbox[3] / 2.0
+                
+                # Get color from this representative point
+                rgb = point_color(img, x_pixel, y_pixel, radius=4)
+                match = closest_legend(rgb, legend_items)
+                
+                series_colors[category_id] = {
+                    'rgb': rgb,
+                    'hex': rgb_to_hex(rgb),
+                    'label': match["text"] if match else f"Series {category_id}"
+                }
+                # Debug: print detected series color
+                print(f"  Series {category_id}: Color {rgb_to_hex(rgb)} → Label: {series_colors[category_id]['label']}")
+            
+            # Second pass: create rows with colors
+            for i, point in enumerate(lines_raw):
+                if isinstance(point, dict):
+                    bbox = point.get('bbox', [0, 0, 0, 0])
+                    x_pixel = bbox[0] + bbox[2] / 2.0  # Center X
+                    y_pixel = bbox[1] + bbox[3] / 2.0  # Center Y
+                    category_id = point.get('category_id', 0)
+                    
+                    # Convert pixel Y to value using the calibrated function
+                    point_value = y_to_val(y_pixel)
+                    
+                    # Get X-axis label for this point
+                    x_category = line_x_labels.get(i, "")
+                    
+                    color_info = series_colors[category_id]
+                    
+                    rows.append({
+                        "point_index": i,
+                        "category": x_category,  # X-axis label (e.g., year)
+                        "label": color_info['label'],  # Series name from legend
+                        "color": color_info['hex'],
+                        "x_pixel": round(x_pixel, 2),
+                        "y_pixel": round(y_pixel, 2),
+                        "value": None if point_value is None else round(point_value, 2),
+                        "series_id": category_id,
+                    })
+        
+        # Process Bar chart data
         for i, (x1, y1, x2, y2) in enumerate(bars_raw or []):
             rgb = bar_color(img, (x1, y1, x2, y2))
             match = closest_legend(rgb, legend_items)
@@ -785,49 +1593,189 @@ def run_on_image(image_path, chart_type="Bar", save_path=None, methods_override=
         
         # Print nice summary
         if len(rows) > 0:
-            df_sorted = df.sort_values('x1').reset_index(drop=True)
             print('\n' + '=' * 100)
-            print(f'BAR CHART ANALYSIS: {os.path.basename(image_path)}')
-            print('=' * 100)
-            if titles:
-                print(f'Title: {list(titles.values())[0]}')
-            print(f'Y-axis range: {y_min:,.0f} to {y_max:,.0f}' if y_min is not None and y_max is not None else 'Y-axis range: Not detected')
-            print(f'Total bars detected: {len(df)}')
-            if len(x_axis_labels) > 0:
-                print(f'X-axis categories detected: {len(x_axis_labels)}')
-            print()
-            
-            for idx, row in df_sorted.iterrows():
-                bar_num = idx + 1
-                category = row['category'] if row['category'] else '(no X-label)'
-                label = row['label'] if row['label'] else ''
-                value = row['value']
-                x_center = (row['x1'] + row['x2']) / 2
+            if chart_type == "Pie":
+                print(f'PIE CHART ANALYSIS: {os.path.basename(image_path)}')
+                print('=' * 100)
+                if titles:
+                    print(f'Title: {list(titles.values())[0]}')
+                print(f'Total segments detected: {len(df)}')
+                if len(legend_items) > 0:
+                    print(f'Legend items found: {len(legend_items)}')
+                print()
                 
-                # Format output based on what labels are available
-                if category and label:
-                    print(f'  Bar {bar_num:2d}: {category:15s} | {label:12s} = {value:8,.2f}')
-                elif category:
-                    print(f'  Bar {bar_num:2d}: {category:15s} = {value:8,.2f}')
-                elif label:
-                    print(f'  Bar {bar_num:2d} at X={x_center:6.1f}: {label:12s} = {value:8,.2f}')
-                else:
-                    print(f'  Bar {bar_num:2d} at X={x_center:6.1f}: {value:8,.2f}')
+                for idx, row in df.iterrows():
+                    seg_num = idx + 1
+                    angle = row.get('angle_degrees', 0)
+                    percentage = row.get('value', 0)
+                    label = row.get('label', '')
+                    color = row.get('color', '')
+                    
+                    if label:
+                        print(f'  Segment {seg_num:2d}: {label:15s} [{color}] = {percentage:6.2f}% ({angle:6.2f}°)')
+                    else:
+                        print(f'  Segment {seg_num:2d}: [{color}] = {percentage:6.2f}% ({angle:6.2f}°)')
+                
+                print('\n' + '-' * 100)
+                print(f'  Total: {df["value"].sum():6.2f}%')
+                print('=' * 100 + '\n')
             
-            print('\n' + '-' * 100)
-            print(f'  Min value: {df["value"].min():10,.2f}')
-            print(f'  Max value: {df["value"].max():10,.2f}')
-            print(f'  Average:   {df["value"].mean():10,.2f}')
-            print('=' * 100 + '\n')
+            elif chart_type == "Line":
+                # Sort by X position for chronological display
+                df_sorted = df.sort_values('x_pixel').reset_index(drop=True)
+                print(f'LINE CHART ANALYSIS: {os.path.basename(image_path)}')
+                print('=' * 100)
+                if titles:
+                    print(f'Title: {list(titles.values())[0]}')
+                print(f'Y-axis range: {y_min:,.0f} to {y_max:,.0f}' if y_min is not None and y_max is not None else 'Y-axis range: Not detected')
+                print(f'Total data points detected: {len(df)}')
+                if len(x_axis_labels) > 0:
+                    print(f'X-axis categories detected: {len(x_axis_labels)} ({", ".join([xl["text"] for xl in x_axis_labels[:5]])}{"..." if len(x_axis_labels) > 5 else ""})')
+                if len(legend_items) > 0:
+                    print(f'Legend items found: {len(legend_items)}')
+                
+                # Group by series to show summary
+                if 'series_id' in df.columns:
+                    series_groups = df.groupby('label')
+                    print(f'Number of series: {len(series_groups)}')
+                print()
+                
+                # Display data organized by X-axis category, then by series
+                if 'category' in df.columns and df['category'].notna().any():
+                    # Group by X-axis category for better readability
+                    categories = df_sorted['category'].unique()
+                    
+                    for cat in categories:
+                        if cat and cat.strip():
+                            print(f'\n  === X-axis: {cat} ===')
+                            cat_data = df_sorted[df_sorted['category'] == cat]
+                            
+                            for idx, row in cat_data.iterrows():
+                                label = row.get('label', '')
+                                value = row.get('value')
+                                color = row.get('color', '')
+                                
+                                val_str = f'{value:8,.2f}' if value is not None else '     N/A'
+                                if label:
+                                    print(f'    {label:15s} [{color}]: {val_str}')
+                                else:
+                                    print(f'    [{color}]: {val_str}')
+                    
+                    # Show any points without X-axis labels
+                    no_cat = df_sorted[df_sorted['category'].isna() | (df_sorted['category'] == '')]
+                    if len(no_cat) > 0:
+                        print(f'\n  === Points without X-axis label ({len(no_cat)} points) ===')
+                        current_series = None
+                        for idx, row in no_cat.iterrows():
+                            label = row.get('label', '')
+                            value = row.get('value')
+                            x_pixel = row.get('x_pixel', 0)
+                            color = row.get('color', '')
+                            
+                            if label != current_series:
+                                if current_series is not None:
+                                    print()
+                                print(f'    --- {label} [{color}] ---')
+                                current_series = label
+                            
+                            val_str = f'{value:8,.2f}' if value is not None else '     N/A'
+                            print(f'    X={x_pixel:7.1f} → Y = {val_str}')
+                else:
+                    # Fallback: Display by series
+                    current_series = None
+                    for idx, row in df_sorted.iterrows():
+                        point_num = idx + 1
+                        label = row.get('label', '')
+                        value = row.get('value')
+                        x_pixel = row.get('x_pixel', 0)
+                        color = row.get('color', '')
+                        
+                        # Print series header when switching to new series
+                        if label != current_series:
+                            if current_series is not None:
+                                print()
+                            print(f'  --- {label} [{color}] ---')
+                            current_series = label
+                        
+                        val_str = f'{value:8,.2f}' if value is not None else '     N/A'
+                        print(f'  Point {point_num:3d}: X={x_pixel:7.1f} → Y = {val_str}')
+                
+                print('\n' + '-' * 100)
+                # Filter out None values for statistics
+                valid_values = df['value'].dropna()
+                if len(valid_values) > 0:
+                    print(f'  Min value: {valid_values.min():10,.2f}')
+                    print(f'  Max value: {valid_values.max():10,.2f}')
+                    print(f'  Average:   {valid_values.mean():10,.2f}')
+                else:
+                    print('  No valid Y-values detected (Y-axis calibration may have failed)')
+                
+                # Show per-series statistics if multiple series
+                if 'series_id' in df.columns and df['series_id'].nunique() > 1:
+                    print('\n  Per-Series Statistics:')
+                    for series_label in df['label'].unique():
+                        series_data = df[df['label'] == series_label]['value'].dropna()
+                        if len(series_data) > 0:
+                            print(f'    {series_label:15s}: Min={series_data.min():8,.2f}, Max={series_data.max():8,.2f}, Avg={series_data.mean():8,.2f}')
+                
+                print('=' * 100 + '\n')
+            
+            else:  # Bar chart
+                df_sorted = df.sort_values('x1').reset_index(drop=True)
+                print(f'BAR CHART ANALYSIS: {os.path.basename(image_path)}')
+                print('=' * 100)
+                if titles:
+                    print(f'Title: {list(titles.values())[0]}')
+                print(f'Y-axis range: {y_min:,.0f} to {y_max:,.0f}' if y_min is not None and y_max is not None else 'Y-axis range: Not detected')
+                print(f'Total bars detected: {len(df)}')
+                if len(x_axis_labels) > 0:
+                    print(f'X-axis categories detected: {len(x_axis_labels)}')
+                if len(legend_items) > 0:
+                    print(f'Legend items found: {len(legend_items)}')
+                print()
+                
+                for idx, row in df_sorted.iterrows():
+                    bar_num = idx + 1
+                    category = row['category'] if row['category'] else '(no X-label)'
+                    label = row['label'] if row['label'] else ''
+                    value = row['value']
+                    x_center = (row['x1'] + row['x2']) / 2
+                    color = row.get('color', '')
+                    
+                    # Format output based on what labels are available
+                    if category and label:
+                        print(f'  Bar {bar_num:2d}: {category:15s} | {label:15s} [{color}] = {value:8,.2f}')
+                    elif category:
+                        print(f'  Bar {bar_num:2d}: {category:15s} [{color}] = {value:8,.2f}')
+                    elif label:
+                        print(f'  Bar {bar_num:2d}: {label:15s} [{color}] = {value:8,.2f}')
+                    else:
+                        print(f'  Bar {bar_num:2d}: [{color}] = {value:8,.2f}')
+                
+                print('\n' + '-' * 100)
+                print(f'  Min value: {df["value"].min():10,.2f}')
+                print(f'  Max value: {df["value"].max():10,.2f}')
+                print(f'  Average:   {df["value"].mean():10,.2f}')
+                print('=' * 100 + '\n')
 
     result = {
         "chart_type": chart_type,
         "chart_title_candidates": titles,
         "y_axis_min_est": y_min,
         "y_axis_max_est": y_max,
-        "bars_raw": _to_py(bars_raw),
-        "bars_summary": rows,
     }
+    
+    # Add chart-specific data
+    if chart_type == "Bar":
+        result["bars_raw"] = _to_py(bars_raw)
+        result["bars_summary"] = rows
+    elif chart_type == "Line":
+        result["lines_raw"] = _to_py(lines_raw)
+        result["lines_summary"] = rows  # List with extracted point values
+    elif chart_type == "Pie":
+        result["pie_segments"] = _to_py(pie_segments)  # List of angles
+        result["pie_summary"] = rows  # List with percentages calculated from angles
+    
     if csv_path:
         result["csv_path"] = csv_path
     if return_images:
@@ -841,13 +1789,14 @@ def run_on_image(image_path, chart_type="Bar", save_path=None, methods_override=
 # ------------------------------------------------------------------
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="DeepRule ChartOCR (Bar only)")
+    parser = argparse.ArgumentParser(description="DeepRule ChartOCR (Bar, Line, Pie)")
     parser.add_argument("--image_path",  default="test",
                         help="Folder containing chart images to process")
     parser.add_argument("--save_path",   default="save",
                         help="Folder where JSON/CSVs will be written")
-    parser.add_argument("--type",        default="Bar",
-                        help="Chart type hint (currently only 'Bar' supported)")
+    parser.add_argument("--type",        default="Bar", 
+                        choices=["Bar", "Line", "Pie"],
+                        help="Chart type: Bar, Line, or Pie")
     parser.add_argument("--data_dir",    default=".",
                         help="Root dir that matches model configs (e.g. /content/DeepRule-master)")
     parser.add_argument("--cache_path",  default="./cache",

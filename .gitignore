@@ -1,6 +1,8 @@
 results/
 
 *.swp
-
+*.pkl
 *.pyc
 *.o*
+
+debug_output/

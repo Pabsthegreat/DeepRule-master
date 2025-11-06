@@ -81,4 +81,4 @@ class model(kp):
         )
 
 loss = AELoss(pull_weight=1e-1, push_weight=1e-1, focal_loss=_neg_loss)
-from azureml.core.compute import ComputeTarget
+#from azureml.core.compute import ComputeTarget

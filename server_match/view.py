@@ -65,6 +65,21 @@ def get_group(request):
         if not os.path.exists(target_path):
             raise RuntimeError("No chart image uploaded.")
 
+        # Get chart type from form (default to Auto)
+        chart_type = request.POST.get("chart_type", "Auto").strip()
+        
+        # Auto-detect chart type if needed
+        data_root = settings.BASE_DIR
+        cache_dir = os.path.join(settings.BASE_DIR, "cache")
+        
+        if chart_type == "Auto":
+            from test_pipe_type_cloud import auto_detect_chart_type
+            chart_type = auto_detect_chart_type(target_path, data_root, cache_dir)
+            print(f"Auto-detected chart type: {chart_type}")
+        
+        if chart_type not in ["Bar", "Line", "Pie"]:
+            chart_type = "Bar"
+        
         min_field = request.POST.get("min", "").strip()
         max_field = request.POST.get("max", "").strip()
         override_min = override_max = None
@@ -75,63 +90,128 @@ def get_group(request):
             except (TypeError, ValueError):
                 override_min = override_max = None
 
-        methods = _ensure_methods()
+        # Load appropriate model for chart type
+        methods = Pre_load_nets(chart_type, 0, data_root, cache_dir)
+        
         result = run_on_image(
             target_path,
-            "Bar",
+            chart_type,
             save_path=save_dir,
             methods_override=methods,
             return_images=True,
         )
 
-        bars_summary = sorted(result.get("bars_summary") or [], key=lambda r: r.get("x1", 0))
-        y_min_est = result.get("y_axis_min_est")
-        y_max_est = result.get("y_axis_max_est")
-
         processed_rows = []
         summary_lines = []
         values = []
+        
+        if chart_type == "Pie":
+            # Handle pie chart results
+            pie_summary = result.get("pie_summary") or []
+            
+            for idx, row in enumerate(pie_summary, 1):
+                angle = row.get("angle_degrees")
+                percentage = row.get("value")
+                category = row.get("category") or ""
+                
+                processed_rows.append({
+                    "index": idx,
+                    "category": category,
+                    "label": "",
+                    "value": percentage,
+                    "color": None,
+                })
+                
+                if category:
+                    summary_lines.append(f"Segment {idx:02d}: {category} = {percentage:.2f}%")
+                else:
+                    summary_lines.append(f"Segment {idx:02d}: {percentage:.2f}%")
+                
+                if percentage is not None:
+                    values.append(percentage)
+        
+        elif chart_type == "Line":
+            # Handle line chart results
+            line_summary = result.get("lines_summary") or []
+            
+            for idx, row in enumerate(line_summary, 1):
+                value = row.get("value")
+                label = row.get("label") or ""
+                x_pixel = row.get("x_pixel", 0)
+                category = row.get("category") or ""
+                color = row.get("color")
+                
+                processed_rows.append({
+                    "index": idx,
+                    "category": category,
+                    "label": label,
+                    "value": value,
+                    "color": color,
+                })
+                
+                # Format with category (X-axis) if available
+                if category and label:
+                    summary_lines.append(f"Point {idx:03d}: {category} | {label} → Y={value:.2f}")
+                elif label:
+                    summary_lines.append(f"Point {idx:03d}: {label} at X={x_pixel:.1f} → Y={value:.2f}")
+                elif category:
+                    summary_lines.append(f"Point {idx:03d}: {category} → Y={value:.2f}")
+                else:
+                    summary_lines.append(f"Point {idx:03d}: X={x_pixel:.1f} → Y={value:.2f}")
+                
+                if value is not None:
+                    values.append(value)
+        
+        else:
+            # Handle bar/line chart results
+            bars_summary = sorted(result.get("bars_summary") or [], key=lambda r: r.get("x1", 0))
+            y_min_est = result.get("y_axis_min_est")
+            y_max_est = result.get("y_axis_max_est")
 
-        for idx, row in enumerate(bars_summary, 1):
-            value = row.get("value")
-            if (
-                value is not None
-                and override_min is not None
-                and override_max is not None
-                and y_min_est is not None
-                and y_max_est is not None
-            ):
-                value = _rescale_value(value, y_min_est, y_max_est, override_min, override_max)
-            if value is not None:
-                value = round(value, 2)
-                values.append(value)
+            for idx, row in enumerate(bars_summary, 1):
+                value = row.get("value")
+                if (
+                    value is not None
+                    and override_min is not None
+                    and override_max is not None
+                    and y_min_est is not None
+                    and y_max_est is not None
+                ):
+                    value = _rescale_value(value, y_min_est, y_max_est, override_min, override_max)
+                if value is not None:
+                    value = round(value, 2)
+                    values.append(value)
 
-            category = row.get("category") or ""
-            label = row.get("label") or ""
-            color = row.get("color")
+                category = row.get("category") or ""
+                label = row.get("label") or ""
+                color = row.get("color")
 
-            processed_rows.append({
-                "index": idx,
-                "category": category,
-                "label": label,
-                "value": value,
-                "color": color,
-            })
+                processed_rows.append({
+                    "index": idx,
+                    "category": category,
+                    "label": label,
+                    "value": value,
+                    "color": color,
+                })
 
-            val_str = "--" if value is None else f"{value:,.2f}"
-            if category and label:
-                summary_lines.append(f"Bar {idx:02d}: {category} | {label} = {val_str}")
-            elif category:
-                summary_lines.append(f"Bar {idx:02d}: {category} = {val_str}")
-            elif label:
-                summary_lines.append(f"Bar {idx:02d}: {label} = {val_str}")
-            else:
-                summary_lines.append(f"Bar {idx:02d}: {val_str}")
+                val_str = "--" if value is None else f"{value:,.2f}"
+                if category and label:
+                    summary_lines.append(f"Bar {idx:02d}: {category} | {label} = {val_str}")
+                elif category:
+                    summary_lines.append(f"Bar {idx:02d}: {category} = {val_str}")
+                elif label:
+                    summary_lines.append(f"Bar {idx:02d}: {label} = {val_str}")
+                else:
+                    summary_lines.append(f"Bar {idx:02d}: {val_str}")
 
-        if override_min is not None and override_max is not None:
+        if chart_type == "Pie":
+            y_axis_summary = "N/A (Pie Chart)"
+        elif chart_type == "Line" and override_min is not None and override_max is not None:
             y_axis_summary = f"{override_min:.2f} to {override_max:.2f}"
-        elif y_min_est is not None and y_max_est is not None:
-            y_axis_summary = f"{y_min_est:.2f} to {y_max_est:.2f}"
+        elif override_min is not None and override_max is not None:
+            y_axis_summary = f"{override_min:.2f} to {override_max:.2f}"
+        elif result.get("y_axis_min_est") is not None and result.get("y_axis_max_est") is not None:
+            y_axis_summary = f"{result.get('y_axis_min_est'):.2f} to {result.get('y_axis_max_est'):.2f}"
         else:
             y_axis_summary = "Not detected"
 
@@ -140,8 +220,12 @@ def get_group(request):
         original_b64 = result.get("original_image_b64") or _file_to_data_uri(target_path)
         overlay_b64 = result.get("overlay_image_b64") or original_b64
 
+        # Check if auto-detection was used
+        was_auto_detected = request.POST.get("chart_type", "Auto").strip() == "Auto"
+        
         context = {
             "Type": result.get("chart_type", "Unknown"),
+            "auto_detected": was_auto_detected,
             "image": original_b64,
             "image_painted": overlay_b64,
             "min2max": y_axis_summary,

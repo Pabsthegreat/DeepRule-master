@@ -43,7 +43,7 @@
 
     <section class="summary">
         <h2>Summary</h2>
-        <div class="meta"><strong>Chart type:</strong> {{ Type }}</div>
+        <div class="meta"><strong>Chart type:</strong> {{ Type }}{% if auto_detected %} <span style="color: #059669; font-size: 0.85em;">(auto-detected)</span>{% endif %}</div>
         {% if ChartTitle and ChartTitle != "None" %}
         <div class="meta"><strong>Chart title:</strong> {{ ChartTitle }}</div>
         {% endif %}
@@ -104,11 +104,20 @@
     {% endif %}
 
     <section>
-        <h2>Try Another Image</h2>
+        <h2>Analyze Another Image</h2>
         <form method="post" enctype="multipart/form-data">
             <div class="form_block">
-                <label for="file">Chart image (optional):</label>
+                <label for="file">Chart image:</label>
                 <input id="file" type="file" name="file">
+            </div>
+            <div class="form_block">
+                <label for="chart_type">Chart type:</label>
+                <select id="chart_type" name="chart_type">
+                    <option value="Auto">Auto-detect</option>
+                    <option value="Bar">Bar Chart</option>
+                    <option value="Line">Line Chart</option>
+                    <option value="Pie">Pie Chart</option>
+                </select>
             </div>
             <div class="form_block">
                 <label for="min">Min value (optional override):</label>
